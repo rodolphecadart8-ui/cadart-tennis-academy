@@ -7,7 +7,7 @@ import {
   Calendar, Clock, MapPin, Sparkles, ShieldAlert, ArrowRight, RotateCcw, Target,
   Check, LayoutDashboard, UserRound, CalendarDays, FlaskRound, Bell, Dumbbell,
   ChevronRight, ArrowLeft, FileDown, Play, FileText, MessageSquare, Copy, Send,
-  Euro, Wallet, UserPlus, UserMinus, Repeat, PieChart, ArrowRight, Percent, Award,
+  Euro, Wallet, UserPlus, UserMinus, Repeat, PieChart, Percent, Award,
   Tent, CalendarRange, Home,
 } from "lucide-react";
 import {
