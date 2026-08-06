@@ -751,6 +751,7 @@ function CoachDashboard({ onLogout }) {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null); // null | "new" | player object
   const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const [profileId, setProfileId] = useState(null);
   const openProfile = (p) => setProfileId(p.id);
   const [showReminders, setShowReminders] = useState(false);
@@ -780,6 +781,7 @@ function CoachDashboard({ onLogout }) {
   };
   const remove = (id) => commit(players.filter(p => p.id !== id));
   const resetExamples = () => { commit(SEED); setConfirmReset(false); };
+  const clearAllPlayers = () => { commit([]); setConfirmClear(false); };
 
   /* Import CSV : colonnes attendues — nom, age, sexe, utr, coach, court, heure_debut, heure_fin, type */
   const [importMsg, setImportMsg] = useState(null);
@@ -919,6 +921,9 @@ function CoachDashboard({ onLogout }) {
             <button style={styles.ghostBtn} onClick={() => fileInputRef.current && fileInputRef.current.click()} title="Importer des joueurs depuis un fichier CSV">
               <UserPlus size={15} /> Importer CSV
             </button>
+            <button style={styles.ghostBtn} onClick={() => setConfirmClear(true)} title="Effacer tous les joueurs" disabled={players.length === 0}>
+              <Trash2 size={15} /> Tout effacer
+            </button>
             <button style={styles.ghostBtn} onClick={() => setConfirmReset(true)} title="Recharger les exemples">
               <RotateCcw size={15} /> Exemples
             </button>
@@ -993,6 +998,10 @@ function CoachDashboard({ onLogout }) {
         <StagesView stages={stages} onSave={commitStages} />
       )}
 
+      {view === "joueurs" && (
+        <JoueursView analyzed={analyzed} onOpen={openProfile} onEdit={(p) => setModal(p)} onDelete={remove} onAdd={() => setModal("new")} />
+      )}
+
       {view === "ia" && (
         <AIAssistantView players={players} stages={stages} />
       )}
@@ -1011,6 +1020,15 @@ function CoachDashboard({ onLogout }) {
           confirmLabel="Recharger"
           onConfirm={resetExamples}
           onCancel={() => setConfirmReset(false)}
+        />
+      )}
+      {confirmClear && (
+        <ConfirmDialog
+          title="Effacer tous les joueurs ?"
+          message={`Cela supprimera définitivement les ${players.length} joueur${players.length > 1 ? "s" : ""} actuellement enregistrés (y compris les exemples). Tu pourras ensuite importer tes vrais joueurs via le bouton « Importer CSV ». Cette action est irréversible.`}
+          confirmLabel="Tout effacer"
+          onConfirm={clearAllPlayers}
+          onCancel={() => setConfirmClear(false)}
         />
       )}
       {showReminders && (
@@ -1644,10 +1662,54 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
   );
 }
 
+function JoueursView({ analyzed, onOpen, onEdit, onDelete, onAdd }) {
+  const [q, setQ] = useState("");
+  const list = q.trim()
+    ? analyzed.filter(p => p.name.toLowerCase().includes(q.trim().toLowerCase()))
+    : analyzed;
+  return (
+    <main style={styles.main}>
+      <header style={styles.header}>
+        <div>
+          <div style={styles.h1}>Joueurs</div>
+          <div style={styles.sub}>{analyzed.length} joueur{analyzed.length > 1 ? "s" : ""} enregistré{analyzed.length > 1 ? "s" : ""}</div>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            style={{ ...styles.input, width: 220 }}
+            placeholder="Rechercher un joueur…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          <button style={styles.primaryBtn} onClick={onAdd}><Plus size={17} /> Ajouter un joueur</button>
+        </div>
+      </header>
+
+      <section style={styles.panel}>
+        {list.length === 0 ? (
+          <div style={styles.emptyPanel}>
+            {analyzed.length === 0
+              ? "Aucun joueur pour l'instant. Ajoute ton premier joueur, ou importe-les depuis l'onglet Planning (bouton « Importer CSV »)."
+              : "Aucun joueur ne correspond à cette recherche."}
+          </div>
+        ) : (
+          <div>
+            {list.map(p => (
+              <PlayerRow key={p.id} p={p} onOpen={() => onOpen(p)} onEdit={() => onEdit(p)} onDelete={() => onDelete(p.id)} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      <footer style={styles.footer}>CADART Tennis Academy · Joueurs — les données sont enregistrées automatiquement.</footer>
+    </main>
+  );
+}
+
 function Sidebar({ active = "dashboard", onNavigate, onLogout }) {
   const nav = [
     { key: "dashboard", icon: LayoutDashboard, label: "Tableau de bord", nav: true },
-    { key: "joueurs", icon: UserRound, label: "Joueurs" },
+    { key: "joueurs", icon: UserRound, label: "Joueurs", nav: true },
     { key: "planning", icon: CalendarDays, label: "Planning", nav: true },
     { key: "stages", icon: Tent, label: "Stages", nav: true },
     { key: "ia", icon: Sparkles, label: "Assistant IA", nav: true },
