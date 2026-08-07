@@ -1,6 +1,7 @@
 import "./storagePolyfill.js";
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import Papa from "papaparse";
+import { supabase } from "./storagePolyfill.js";
 import {
   Users, Activity, FlaskConical, AlertTriangle, Trophy, Plus, X,
   Pencil, Trash2, Moon, HeartPulse, Gauge, TrendingUp, TrendingDown,
@@ -54,37 +55,58 @@ const AXES = ["Service", "Retour", "Coup droit", "Revers", "Volée", "Jeu de jam
 const COURTS = ["Court 1", "Court 2", "Court 3", "Court 4", "Court 5"];
 const SALLES = ["Salle physique 1", "Salle physique 2"];
 
-/* TARIF_PAR_ENFANT : estimation par défaut si le joueur n'a pas de tarifMensuel propre renseigné. */
-const TARIF_PAR_ENFANT = 1200;
+/* Aucune estimation par défaut : un joueur sans tarif renseigné compte pour 0€
+   et déclenche une alerte, plutôt que de fausser silencieusement le calcul. */
 
-/* ---------- Coachs & prestations ---------- */
-const COACHS_KEY = "cadart:coachs:v1";
-async function loadCoachs() {
-  try { const r = await window.storage.get(COACHS_KEY); if (r && r.value) return JSON.parse(r.value); }
-  catch (e) { /* clé absente */ }
-  return null;
+/* ---------- Mois (pour l'onglet Dépenses, organisé mois par mois) ---------- */
+const MOIS_NOMS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+/* Convertit "Juin 2026" -> {year, monthIndex} pour trier/comparer les mois chronologiquement */
+function parseMoisLabel(label) {
+  if (!label) return null;
+  const parts = label.trim().toLowerCase().split(/\s+/);
+  if (parts.length < 2) return null;
+  const monthIndex = MOIS_NOMS.indexOf(parts[0]);
+  const year = parseInt(parts[1], 10);
+  if (monthIndex === -1 || !year) return null;
+  return { year, monthIndex };
 }
-async function saveCoachs(c) {
-  try { await window.storage.set(COACHS_KEY, JSON.stringify(c)); }
-  catch (e) { console.error("Sauvegarde coachs impossible :", e); }
+function moisSortKey(label) {
+  const p = parseMoisLabel(label);
+  return p ? p.year * 12 + p.monthIndex : 0;
 }
-/* Coachs payés à la prestation — montants du mois de juin 2026, extraits du relevé bancaire.
-   Le tarif de chacun varie d'un mois à l'autre : à mettre à jour régulièrement dans l'onglet Dépenses. */
-const COACHS_SEED = [
-  { id: "co1", nom: "Frederic Caselles", tarifMensuel: 7362 },
-  { id: "co2", nom: "Eric Dochtermann", tarifMensuel: 4750 },
-  { id: "co3", nom: "Mazaleyrat Maxime", tarifMensuel: 2700 },
-  { id: "co4", nom: "Lami Sebastien", tarifMensuel: 2693 },
-  { id: "co5", nom: "Remy Romain", tarifMensuel: 2750 },
-  { id: "co6", nom: "Maxime Labasque", tarifMensuel: 2550 },
-  { id: "co7", nom: "Jules Aurouze", tarifMensuel: 1727 },
-  { id: "co8", nom: "Jeremy Cayla", tarifMensuel: 1834 },
-  { id: "co9", nom: "Cadart Tom", tarifMensuel: 1500 },
-  { id: "co10", nom: "Heurtebise", tarifMensuel: 1308 },
-  { id: "co11", nom: "Matis Roche", tarifMensuel: 950 },
-  { id: "co12", nom: "Elie Gadilhe", tarifMensuel: 927 },
-  { id: "co13", nom: "Olivier Rebeyrotte", tarifMensuel: 250 },
-];
+function moisLabelNow() {
+  const d = new Date();
+  return `${MOIS_NOMS[d.getMonth()].charAt(0).toUpperCase()}${MOIS_NOMS[d.getMonth()].slice(1)} ${d.getFullYear()}`;
+}
+function moisLabelFromDate(date) {
+  if (!date) return null;
+  return `${MOIS_NOMS[date.getMonth()].charAt(0).toUpperCase()}${MOIS_NOMS[date.getMonth()].slice(1)} ${date.getFullYear()}`;
+}
+/* Revenu généré par les stages dont la date de début tombe dans le mois donné
+   (ex : "Juin 2026") — inscrits × tarif, + supplément hébergement le cas échéant. */
+function stagesDuMois(stages, moisLabel) {
+  return (stages || []).filter(s => moisLabelFromDate(parseFRDate(s.du)) === moisLabel);
+}
+function caStagesMois(stages, moisLabel) {
+  return stagesDuMois(stages, moisLabel).reduce((a, s) => {
+    const parts = (s.participants || []).map(x => (typeof x === "string" ? { nom: x, hebergement: false } : x));
+    const avecHeb = parts.filter(x => x.hebergement).length;
+    return a + parts.length * (s.tarif || 0) + avecHeb * (s.hebergementTarif || 0);
+  }, 0);
+}
+/* Extrait, à partir des dépenses, les prestations coachs du mois le plus récent renseigné
+   (utilisé pour le "Rendement par coach" du tableau de bord et l'Assistant IA). */
+function dernieresPrestationsCoachs(depenses) {
+  const list = depenses || [];
+  const moisDisponibles = [...new Set(list.map(d => d.mois).filter(Boolean))].sort((a, b) => moisSortKey(a) - moisSortKey(b));
+  const dernierMois = moisDisponibles[moisDisponibles.length - 1];
+  if (!dernierMois) return {};
+  const map = {};
+  list.filter(d => d.mois === dernierMois && d.categorie === "Prestations coachs").forEach(d => {
+    map[d.libelle] = (map[d.libelle] || 0) + (d.montant || 0);
+  });
+  return map;
+}
 
 /* Niveau de référence Top 50 mondial (repère de progression) */
 const TOP50 = {
@@ -475,8 +497,8 @@ function genStagesRecurrents() {
 }
 STAGES_SEED.push(...genStagesRecurrents());
 
-/* ---------- Dépenses de l'académie ---------- */
-const DEPENSES_KEY = "cadart:depenses:v2";
+/* ---------- Dépenses de l'académie (organisées mois par mois) ---------- */
+const DEPENSES_KEY = "cadart:depenses:v3";
 async function loadDepenses() {
   try { const r = await window.storage.get(DEPENSES_KEY); if (r && r.value) return JSON.parse(r.value); }
   catch (e) { /* clé absente */ }
@@ -486,19 +508,34 @@ async function saveDepenses(d) {
   try { await window.storage.set(DEPENSES_KEY, JSON.stringify(d)); }
   catch (e) { console.error("Sauvegarde dépenses impossible :", e); }
 }
-const DEPENSES_CATEGORIES = ["Location courts / salle", "Hébergement stages", "Assurance", "Charges sociales (URSSAF)", "Impôts et taxes", "Matériel", "Marketing / communication", "Comptabilité / gestion", "Frais bancaires", "Remboursements frais", "Électricité / eau", "Entretien", "Administratif", "Autre"];
-/* Dépenses réelles extraites du relevé bancaire de juin 2026 — à ajuster/compléter chaque mois */
+const DEPENSES_CATEGORIES = ["Prestations coachs", "Location courts / salle", "Hébergement stages", "Assurance", "Charges sociales (URSSAF)", "Impôts et taxes", "Matériel", "Marketing / communication", "Comptabilité / gestion", "Frais bancaires", "Remboursements frais", "Électricité / eau", "Entretien", "Administratif", "Autre"];
+/* Dépenses réelles extraites du relevé bancaire de juin 2026 — à compléter mois par mois.
+   Les prestations de chaque coach sont des dépenses comme les autres (catégorie "Prestations coachs"),
+   ce qui permet de les faire varier chaque mois exactement comme le reste. */
 const DEPENSES_SEED = [
-  { id: "d1", categorie: "Location courts / salle", libelle: "Loyer académie (Country Club Aixois)", montant: 3592, frequence: "mensuelle", date: "" },
-  { id: "d2", categorie: "Assurance", libelle: "Assurance RC Pro (GAN)", montant: 70, frequence: "mensuelle", date: "" },
-  { id: "d3", categorie: "Charges sociales (URSSAF)", libelle: "URSSAF PACA", montant: 1142, frequence: "mensuelle", date: "" },
-  { id: "d4", categorie: "Impôts et taxes", libelle: "DGFIP", montant: 92, frequence: "mensuelle", date: "" },
-  { id: "d5", categorie: "Comptabilité / gestion", libelle: "Comptable (Exaudis)", montant: 258, frequence: "mensuelle", date: "" },
-  { id: "d6", categorie: "Administratif", libelle: "Cotisation association", montant: 13, frequence: "mensuelle", date: "" },
-  { id: "d7", categorie: "Frais bancaires", libelle: "Frais d'encaissement carte bancaire", montant: 19, frequence: "mensuelle", date: "" },
-  { id: "d8", categorie: "Hébergement stages", libelle: "Logis des Clercs (stage juin)", montant: 7234, frequence: "ponctuelle", date: "29/06/2026" },
-  { id: "d9", categorie: "Location courts / salle", libelle: "Location terrain (Ligue de Provence)", montant: 334, frequence: "ponctuelle", date: "15/06/2026" },
-  { id: "d10", categorie: "Remboursements frais", libelle: "Indemnités kilométriques + repas (coachs)", montant: 895, frequence: "ponctuelle", date: "29/06/2026" },
+  { id: "d1", mois: "Juin 2026", categorie: "Location courts / salle", libelle: "Loyer académie (Country Club Aixois)", montant: 3592 },
+  { id: "d2", mois: "Juin 2026", categorie: "Assurance", libelle: "Assurance RC Pro (GAN)", montant: 70 },
+  { id: "d3", mois: "Juin 2026", categorie: "Charges sociales (URSSAF)", libelle: "URSSAF PACA", montant: 1142 },
+  { id: "d4", mois: "Juin 2026", categorie: "Impôts et taxes", libelle: "DGFIP", montant: 92 },
+  { id: "d5", mois: "Juin 2026", categorie: "Comptabilité / gestion", libelle: "Comptable (Exaudis)", montant: 258 },
+  { id: "d6", mois: "Juin 2026", categorie: "Administratif", libelle: "Cotisation association", montant: 13 },
+  { id: "d7", mois: "Juin 2026", categorie: "Frais bancaires", libelle: "Frais d'encaissement carte bancaire", montant: 19 },
+  { id: "d8", mois: "Juin 2026", categorie: "Hébergement stages", libelle: "Logis des Clercs (stage juin)", montant: 7234 },
+  { id: "d9", mois: "Juin 2026", categorie: "Location courts / salle", libelle: "Location terrain (Ligue de Provence)", montant: 334 },
+  { id: "d10", mois: "Juin 2026", categorie: "Remboursements frais", libelle: "Indemnités kilométriques + repas (coachs)", montant: 895 },
+  { id: "co1", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: 7362 },
+  { id: "co2", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: 4750 },
+  { id: "co3", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: 2700 },
+  { id: "co4", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: 2693 },
+  { id: "co5", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Remy Romain", montant: 2750 },
+  { id: "co6", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: 2550 },
+  { id: "co7", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: 1727 },
+  { id: "co8", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: 1834 },
+  { id: "co9", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Cadart Tom", montant: 1500 },
+  { id: "co10", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: 1308 },
+  { id: "co11", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: 950 },
+  { id: "co12", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: 927 },
+  { id: "co13", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: 250 },
 ];
 
 /* ---------- Le cerveau : analyse d'un joueur ---------- */
@@ -657,28 +694,42 @@ function AuthGate() {
     (async () => {
       try {
         const r = await window.storage.get(SESSION_KEY);
-        setSession(r && r.value ? JSON.parse(r.value) : null);
+        let s = r && r.value ? JSON.parse(r.value) : null;
+        if (s && s.role === "admin" && supabase) {
+          const { data } = await supabase.auth.getSession();
+          if (!data || !data.session) s = null; // session expirée côté Supabase : on redemande la connexion
+        }
+        setSession(s);
       } catch (e) { setSession(null); }
     })();
   }, []);
 
   const login = (s) => { setSession(s); window.storage.set(SESSION_KEY, JSON.stringify(s)).catch(() => {}); };
-  const logout = () => { setSession(null); window.storage.delete(SESSION_KEY).catch(() => {}); };
+  const logout = () => {
+    setSession(null);
+    window.storage.delete(SESSION_KEY).catch(() => {});
+    if (supabase) supabase.auth.signOut().catch(() => {});
+  };
 
   if (session === undefined) {
     return <div style={{ ...styles.shell, alignItems: "center", justifyContent: "center", display: "flex" }}><div style={{ color: T.mute }}>Chargement…</div></div>;
   }
   if (!session) return <LoginScreen onLogin={login} />;
-  if (session.role === "admin") return <CoachDashboard onLogout={logout} />;
+  if (session.role === "admin") return <CoachDashboard onLogout={logout} adminEmail={session.email} />;
   return <PlayerPortal playerId={session.playerId} onLogout={logout} />;
 }
 
 function LoginScreen({ onLogin }) {
-  const [mode, setMode] = useState(null); // null | "joueur"
+  const [mode, setMode] = useState(null); // null | "joueur" | "academie"
   const [players, setPlayers] = useState([]);
   const [selectedId, setSelectedId] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
 
   useEffect(() => {
     (async () => { const stored = await loadPlayers(); setPlayers(stored || SEED); })();
@@ -689,6 +740,16 @@ function LoginScreen({ onLogin }) {
     if (!player) { setError("Sélectionne ton nom dans la liste."); return; }
     if ((player.codeAcces || "") !== code.trim()) { setError("Code d'accès incorrect."); return; }
     onLogin({ role: "player", playerId: player.id });
+  };
+
+  const tryAdminLogin = async () => {
+    if (!supabase) { setAuthError("Configuration Supabase manquante — contacte l'administrateur."); return; }
+    if (!email.trim() || !password) { setAuthError("Renseigne ton email et ton mot de passe."); return; }
+    setAuthLoading(true); setAuthError("");
+    const { data, error: err } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    setAuthLoading(false);
+    if (err) { setAuthError("Email ou mot de passe incorrect."); return; }
+    onLogin({ role: "admin", email: (data.user && data.user.email) || email.trim() });
   };
 
   return (
@@ -710,11 +771,34 @@ function LoginScreen({ onLogin }) {
 
       {!mode && (
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap", justifyContent: "center", position: "relative", zIndex: 1 }}>
-          <button style={{ ...styles.primaryBtn, padding: "14px 22px", fontSize: 14 }} onClick={() => onLogin({ role: "admin" })}>
+          <button style={{ ...styles.primaryBtn, padding: "14px 22px", fontSize: 14 }} onClick={() => { setMode("academie"); setAuthError(""); }}>
             <LayoutDashboard size={17} /> Espace Académie
           </button>
           <button style={{ ...styles.ghostBtn, padding: "14px 22px", fontSize: 14, background: "rgba(17,26,22,0.75)", backdropFilter: "blur(4px)" }} onClick={() => { setMode("joueur"); setError(""); }}>
             <UserRound size={17} /> Espace Joueur
+          </button>
+        </div>
+      )}
+
+      {mode === "academie" && (
+        <div style={{ ...styles.panel, width: 340, background: "rgba(17,26,22,0.92)", backdropFilter: "blur(6px)", position: "relative", zIndex: 1 }}>
+          <div style={styles.panelTitle}>Connexion académie</div>
+          <div style={{ marginTop: 14 }}>
+            <Field label="Email">
+              <input style={styles.input} type="email" value={email} placeholder="toi@cadart-tennis.fr" onChange={(e) => setEmail(e.target.value)} />
+            </Field>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <Field label="Mot de passe">
+              <input style={styles.input} type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && tryAdminLogin()} />
+            </Field>
+          </div>
+          {authError && <div style={{ color: T.red, fontSize: 12, marginTop: 10, fontWeight: 600 }}>{authError}</div>}
+          <button style={{ ...styles.primaryBtn, marginTop: 16, width: "100%", justifyContent: "center" }} onClick={tryAdminLogin} disabled={authLoading}>
+            {authLoading ? "Connexion…" : "Se connecter"}
+          </button>
+          <button style={{ ...styles.ghostBtn, marginTop: 8, width: "100%", justifyContent: "center" }} onClick={() => { setMode(null); setAuthError(""); }}>
+            <ArrowLeft size={14} /> Retour
           </button>
         </div>
       )}
@@ -798,7 +882,7 @@ function PlayerPortal({ playerId, onLogout }) {
   );
 }
 
-function CoachDashboard({ onLogout }) {
+function CoachDashboard({ onLogout, adminEmail }) {
   const [players, setPlayers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null); // null | "new" | player object
@@ -811,7 +895,6 @@ function CoachDashboard({ onLogout }) {
   const navigate = (v) => { setView(v); setProfileId(null); };
   const [stages, setStages] = useState([]);
   const [depenses, setDepenses] = useState([]);
-  const [coachs, setCoachs] = useState([]);
 
   useEffect(() => {
     (async () => {
@@ -824,9 +907,6 @@ function CoachDashboard({ onLogout }) {
       const dp = await loadDepenses();
       if (dp === null) { setDepenses(DEPENSES_SEED); saveDepenses(DEPENSES_SEED); }
       else setDepenses(dp);
-      const co = await loadCoachs();
-      if (co === null) { setCoachs(COACHS_SEED); saveCoachs(COACHS_SEED); }
-      else setCoachs(co);
       setLoading(false);
     })();
   }, []);
@@ -834,7 +914,6 @@ function CoachDashboard({ onLogout }) {
   const commit = (next) => { setPlayers(next); savePlayers(next); };
   const commitStages = (next) => { setStages(next); saveStages(next); };
   const commitDepenses = (next) => { setDepenses(next); saveDepenses(next); };
-  const commitCoachs = (next) => { setCoachs(next); saveCoachs(next); };
 
   const upsert = (player) => {
     const exists = players.some(p => p.id === player.id);
@@ -946,7 +1025,7 @@ function CoachDashboard({ onLogout }) {
   if (activePlayer) {
     return (
       <div style={styles.shell}>
-        <Sidebar active="joueurs" onLogout={onLogout} />
+        <Sidebar active="joueurs" onLogout={onLogout} adminEmail={adminEmail} />
         <PlayerProfile player={activePlayer} onBack={() => setProfileId(null)} onEdit={() => setModal(activePlayer)} onSavePlayer={upsert} />
         {modal && (
           <PlayerModal initial={modal === "new" ? null : modal} onSave={upsert} onClose={() => setModal(null)} />
@@ -957,13 +1036,13 @@ function CoachDashboard({ onLogout }) {
 
   return (
     <div style={styles.shell}>
-      <Sidebar active={view} onNavigate={navigate} onLogout={onLogout} />
+      <Sidebar active={view} onNavigate={navigate} onLogout={onLogout} adminEmail={adminEmail} />
 
       {view === "dashboard" && (
         <Cockpit
           players={players} analyzed={analyzed} priorities={priorities}
           competitionPlayers={competitionPlayers} facilityGroups={facilityGroups}
-          onOpenPlayer={openProfile} onGoPlanning={() => navigate("planning")} coachs={coachs}
+          onOpenPlayer={openProfile} onGoPlanning={() => navigate("planning")} depenses={depenses}
         />
       )}
 
@@ -1064,7 +1143,7 @@ function CoachDashboard({ onLogout }) {
       )}
 
       {view === "depenses" && (
-        <DepensesView depenses={depenses} onSave={commitDepenses} players={players} coachs={coachs} onSaveCoachs={commitCoachs} />
+        <DepensesView depenses={depenses} onSave={commitDepenses} players={players} stages={stages} />
       )}
 
       {view === "joueurs" && (
@@ -1072,7 +1151,7 @@ function CoachDashboard({ onLogout }) {
       )}
 
       {view === "ia" && (
-        <AIAssistantView players={players} stages={stages} depenses={depenses} coachs={coachs} />
+        <AIAssistantView players={players} stages={stages} depenses={depenses} />
       )}
 
       {modal && (
@@ -1111,9 +1190,14 @@ function CoachDashboard({ onLogout }) {
    SOUS-COMPOSANTS
    ============================================================ */
 
-function Stat({ icon: Icon, label, value, sub, subColor, tint = T.green }) {
+function Stat({ icon: Icon, label, value, sub, subColor, tint = T.green, onClick }) {
   return (
-    <div style={styles.kpi}>
+    <div
+      style={{ ...styles.kpi, cursor: onClick ? "pointer" : "default", ...(onClick ? { transition: "border-color .15s" } : {}) }}
+      onClick={onClick}
+      onMouseEnter={(e) => { if (onClick) e.currentTarget.style.borderColor = `${tint}66`; }}
+      onMouseLeave={(e) => { if (onClick) e.currentTarget.style.borderColor = T.border; }}
+    >
       {Icon && <span style={{ ...styles.kpiIcon, background: `${tint}1f`, color: tint }}><Icon size={17} /></span>}
       <div style={{ minWidth: 0 }}>
         <div style={styles.kpiValue}>{value}</div>
@@ -1259,17 +1343,17 @@ function StagesView({ stages, onSave }) {
 /* ============================================================
    ASSISTANT IA — recommandations marges & performance
    ============================================================ */
-function buildAcademySummary(players, stages, depenses, coachs) {
+function buildAcademySummary(players, stages, depenses) {
   const joueursActifs = players.length;
   const indices = players.map(p => (p.detail && p.detail.indice) || p.form || 0).filter(Boolean);
   const indiceMoyen = indices.length ? Math.round(indices.reduce((a, b) => a + b, 0) / indices.length) : 0;
   const enRisque = players.filter(p => analyze(p).severity === "high").length;
   const enProgression = players.filter(p => (p.detail && p.detail.indiceDelta > 0) || p.serviceTrend >= 8).length;
 
-  const coachsList = coachs || [];
-  const tarifCoach = (name) => (coachsList.find(c => c.nom === name) || {}).tarifMensuel || 0;
+  const prestationsCoachs = dernieresPrestationsCoachs(depenses);
+  const tarifCoach = (name) => prestationsCoachs[name] || 0;
 
-  // Rendement par coach (même logique que le tableau de bord)
+  // Rendement par coach (même logique que le tableau de bord), basé sur le dernier mois de dépenses renseigné
   const coachMap = {};
   players.forEach(p => {
     const coachName = (p.session && p.session.coach) || "Non assigné";
@@ -1277,7 +1361,7 @@ function buildAcademySummary(players, stages, depenses, coachs) {
     coachMap[coachName].push(p);
   });
   const coachRendement = Object.entries(coachMap).map(([name, list]) => {
-    const revenu = list.reduce((a, p) => a + (p.tarifMensuel || TARIF_PAR_ENFANT), 0);
+    const revenu = list.reduce((a, p) => a + (p.tarifMensuel || 0), 0);
     const salaire = tarifCoach(name);
     return { coach: name, nbEnfants: list.length, revenuMensuel: revenu, salaireMensuel: salaire, rendementMensuel: revenu - salaire };
   }).sort((a, b) => a.rendementMensuel - b.rendementMensuel);
@@ -1295,18 +1379,23 @@ function buildAcademySummary(players, stages, depenses, coachs) {
   const parType = {};
   list.forEach(s => { parType[s.type] = (parType[s.type] || 0) + 1; });
 
-  // Dépenses réelles et marge
+  // Dépenses réelles et marge — sur le dernier mois renseigné
   const dList = depenses || [];
-  const depensesMensuelles = dList.filter(d => d.frequence === "mensuelle").reduce((a, d) => a + (d.montant || 0), 0);
+  const moisDisponibles = [...new Set(dList.map(d => d.mois).filter(Boolean))].sort((a, b) => moisSortKey(a) - moisSortKey(b));
+  const dernierMois = moisDisponibles[moisDisponibles.length - 1];
+  const depensesDuMois = dList.filter(d => d.mois === dernierMois);
+  const depensesMensuelles = depensesDuMois.filter(d => d.categorie !== "Prestations coachs").reduce((a, d) => a + (d.montant || 0), 0);
   const depensesParCategorie = {};
-  dList.filter(d => d.frequence === "mensuelle").forEach(d => { depensesParCategorie[d.categorie] = (depensesParCategorie[d.categorie] || 0) + d.montant; });
-  const totalSalairesCoachs = coachsList.reduce((a, c) => a + (c.tarifMensuel || 0), 0);
-  const revenuJoueursMensuel = players.reduce((a, p) => a + (p.tarifMensuel || TARIF_PAR_ENFANT), 0);
-  const margeMensuelleEstimee = revenuJoueursMensuel - totalSalairesCoachs - depensesMensuelles;
+  depensesDuMois.filter(d => d.categorie !== "Prestations coachs").forEach(d => { depensesParCategorie[d.categorie] = (depensesParCategorie[d.categorie] || 0) + d.montant; });
+  const totalSalairesCoachs = Object.values(prestationsCoachs).reduce((a, v) => a + v, 0);
+  const revenuJoueursMensuel = players.reduce((a, p) => a + (p.tarifMensuel || 0), 0);
+  const revenuStagesDuMois = dernierMois ? caStagesMois(list, dernierMois) : 0;
+  const margeMensuelleEstimee = revenuJoueursMensuel + revenuStagesDuMois - totalSalairesCoachs - depensesMensuelles;
 
   return {
     joueursActifs, indiceMoyen, enRisque, enProgression, coachRendement,
-    stagesCount: list.length, remplissageStages, caStages, repartitionParType: parType,
+    stagesCount: list.length, remplissageStages, caStages, revenuStagesDuMois, repartitionParType: parType,
+    moisAnalyse: dernierMois || null,
     revenuJoueursMensuel, totalSalairesCoachs, depensesMensuelles, depensesParCategorie, margeMensuelleEstimee,
   };
 }
@@ -1338,11 +1427,11 @@ async function callClaudeAPI(prompt) {
   return (data.content || []).map(b => b.text || "").join("\n").trim();
 }
 
-function AIAssistantView({ players, stages, depenses, coachs }) {
+function AIAssistantView({ players, stages, depenses }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
-  const summary = useMemo(() => buildAcademySummary(players, stages, depenses, coachs), [players, stages, depenses, coachs]);
+  const summary = useMemo(() => buildAcademySummary(players, stages, depenses), [players, stages, depenses]);
 
   const generate = async () => {
     setLoading(true); setError(null); setResult(null);
@@ -1411,13 +1500,26 @@ function AIAssistantView({ players, stages, depenses, coachs }) {
 /* ============================================================
    DÉPENSES — vue et modale
    ============================================================ */
-function DepensesView({ depenses, onSave, players, coachs, onSaveCoachs }) {
-  const [modal, setModal] = useState(null);
-  const [coachModal, setCoachModal] = useState(null);
+function DepensesView({ depenses, onSave, players, stages }) {
   const list = depenses || [];
-  const coachsList = coachs || [];
   const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
 
+  const mois = useMemo(() => {
+    const uniq = [...new Set(list.map(d => d.mois).filter(Boolean))];
+    return uniq.sort((a, b) => moisSortKey(a) - moisSortKey(b));
+  }, [list]);
+
+  const [selectedMois, setSelectedMois] = useState(null);
+  const [addingMois, setAddingMois] = useState(false);
+  const [newMoisLabel, setNewMoisLabel] = useState(moisLabelNow());
+  useEffect(() => {
+    if (!selectedMois && mois.length > 0) setSelectedMois(mois[mois.length - 1]);
+  }, [mois, selectedMois]);
+  const activeMois = selectedMois || (mois.length ? mois[mois.length - 1] : moisLabelNow());
+
+  const [modal, setModal] = useState(null);
+  const [showRecettes, setShowRecettes] = useState(false);
+  const [showStages, setShowStages] = useState(false);
   const upsert = (d) => {
     const ex = list.some(x => x.id === d.id);
     onSave(ex ? list.map(x => (x.id === d.id ? d : x)) : [...list, d]);
@@ -1425,77 +1527,125 @@ function DepensesView({ depenses, onSave, players, coachs, onSaveCoachs }) {
   };
   const remove = (id) => onSave(list.filter(x => x.id !== id));
 
-  const upsertCoach = (c) => {
-    const ex = coachsList.some(x => x.id === c.id);
-    onSaveCoachs(ex ? coachsList.map(x => (x.id === c.id ? c : x)) : [...coachsList, c]);
-    setCoachModal(null);
-  };
-  const removeCoach = (id) => onSaveCoachs(coachsList.filter(x => x.id !== id));
+  const filtered = list.filter(d => d.mois === activeMois);
+  const prestations = filtered.filter(d => d.categorie === "Prestations coachs");
+  const autres = filtered.filter(d => d.categorie !== "Prestations coachs");
+  const totalPrestations = prestations.reduce((a, d) => a + (d.montant || 0), 0);
+  const totalAutres = autres.reduce((a, d) => a + (d.montant || 0), 0);
+  const allPlayers = players || [];
+  const playersSansTarif = allPlayers.filter(p => !p.tarifMensuel || p.tarifMensuel <= 0);
+  const revenuJoueurs = allPlayers.reduce((a, p) => a + (p.tarifMensuel || 0), 0);
+  const stagesMois = stagesDuMois(stages, activeMois);
+  const revenuStages = caStagesMois(stages, activeMois);
+  const marge = revenuJoueurs + revenuStages - totalPrestations - totalAutres;
 
-  const mensuelles = list.filter(d => d.frequence === "mensuelle");
-  const ponctuelles = list.filter(d => d.frequence !== "mensuelle");
-  const totalMensuel = mensuelles.reduce((a, d) => a + (d.montant || 0), 0);
-  const totalSalaires = coachsList.reduce((a, c) => a + (c.tarifMensuel || 0), 0);
-  const revenuJoueurs = (players || []).reduce((a, p) => a + (p.tarifMensuel || TARIF_PAR_ENFANT), 0);
-  const marge = revenuJoueurs - totalSalaires - totalMensuel;
+  const confirmNewMois = () => {
+    const label = newMoisLabel.trim();
+    if (!label) return;
+    setSelectedMois(label);
+    setAddingMois(false);
+  };
 
   return (
     <main style={styles.main}>
       <header style={styles.header}>
         <div>
           <div style={styles.h1}>Dépenses</div>
-          <div style={styles.sub}>{todayLabel()} · vue d'ensemble de la rentabilité</div>
+          <div style={styles.sub}>Vue mois par mois de la rentabilité</div>
         </div>
-        <button style={styles.primaryBtn} onClick={() => setModal("new")}><Plus size={16} /> Nouvelle dépense</button>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button style={styles.ghostBtn} onClick={() => generateBilanAnnuelPdf(list, stages, allPlayers)} title="Générer un bilan pour le comptable">
+            <FileDown size={15} /> Bilan annuel (PDF)
+          </button>
+          <button style={styles.primaryBtn} onClick={() => setModal("new")}><Plus size={16} /> Nouvelle dépense</button>
+        </div>
       </header>
 
-      <div style={styles.kpiRow}>
-        <Stat icon={Euro} label="Revenus joueurs / mois" value={eur(revenuJoueurs)} sub={`${(players || []).length} joueurs`} subColor={T.mute} />
-        <Stat icon={Wallet} label="Prestations coachs / mois" value={eur(totalSalaires)} sub={`${coachsList.length} coach${coachsList.length > 1 ? "s" : ""}`} subColor={T.mute} />
-        <Stat icon={Percent} label="Dépenses fixes / mois" value={eur(totalMensuel)} sub={`${mensuelles.length} poste${mensuelles.length > 1 ? "s" : ""}`} subColor={T.mute} />
-        <Stat icon={TrendingUp} label="Marge mensuelle estimée" value={eur(marge)} sub={marge >= 0 ? "positive" : "négative"} subColor={marge >= 0 ? T.green : T.red} tint={marge >= 0 ? T.green : T.red} />
+      {/* Sélecteur de mois */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 22 }}>
+        {mois.map(m => (
+          <button
+            key={m}
+            onClick={() => setSelectedMois(m)}
+            style={{
+              padding: "8px 16px", borderRadius: 20, fontSize: 13, fontWeight: 700, cursor: "pointer",
+              border: `1px solid ${m === activeMois ? T.green : T.border2}`,
+              background: m === activeMois ? T.greenGlow : "transparent",
+              color: m === activeMois ? T.green : T.mute,
+            }}
+          >
+            {m}
+          </button>
+        ))}
+        {!addingMois ? (
+          <button style={styles.ghostBtn} onClick={() => { setNewMoisLabel(moisLabelNow()); setAddingMois(true); }}>
+            <Plus size={13} /> Nouveau mois
+          </button>
+        ) : (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input style={{ ...styles.input, width: 160 }} value={newMoisLabel} placeholder="Juillet 2026" onChange={(e) => setNewMoisLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && confirmNewMois()} />
+            <button style={styles.smallBtn} onClick={confirmNewMois}><Check size={13} /></button>
+            <button style={styles.iconBtn} onClick={() => setAddingMois(false)}><X size={13} /></button>
+          </div>
+        )}
       </div>
+
+      <div style={styles.kpiRow}>
+        <Stat
+          icon={Euro} label="Revenus joueurs (actuel)" value={eur(revenuJoueurs)} onClick={() => setShowRecettes(true)}
+          sub={playersSansTarif.length > 0 ? `⚠️ ${playersSansTarif.length} sans tarif · voir détail` : `${allPlayers.length} joueurs · voir détail`}
+          subColor={playersSansTarif.length > 0 ? T.red : T.mute}
+        />
+        <Stat
+          icon={Tent} label={`Revenus stages · ${activeMois}`} value={eur(revenuStages)} onClick={() => setShowStages(true)}
+          sub={`${stagesMois.length} stage${stagesMois.length > 1 ? "s" : ""} · voir détail`} subColor={T.mute}
+        />
+        <Stat icon={Wallet} label={`Prestations coachs · ${activeMois}`} value={eur(totalPrestations)} sub={`${prestations.length} coach${prestations.length > 1 ? "s" : ""}`} subColor={T.mute} />
+        <Stat icon={Percent} label={`Autres dépenses · ${activeMois}`} value={eur(totalAutres)} sub={`${autres.length} poste${autres.length > 1 ? "s" : ""}`} subColor={T.mute} />
+        <Stat icon={TrendingUp} label="Marge estimée" value={eur(marge)} sub={marge >= 0 ? "positive" : "négative"} subColor={marge >= 0 ? T.green : T.red} tint={marge >= 0 ? T.green : T.red} />
+      </div>
+
+      {playersSansTarif.length > 0 && (
+        <div style={{ background: `${T.red}14`, border: `1px solid ${T.red}44`, color: T.red, borderRadius: 10, padding: "10px 14px", fontSize: 12.5, fontWeight: 600, marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
+          <AlertTriangle size={15} />
+          {playersSansTarif.length} joueur{playersSansTarif.length > 1 ? "s n'ont" : " n'a"} pas de tarif renseigné — {playersSansTarif.length > 1 ? "ils ne comptent" : "il ne compte"} pour 0€ dans le calcul. Clique sur « Revenus joueurs » pour voir qui, et corriger leur fiche.
+        </div>
+      )}
 
       <div style={{ fontSize: 11.5, color: T.dim, marginBottom: 20, lineHeight: 1.6 }}>
-        Revenus joueurs = somme des tarifs mensuels réels renseignés sur chaque fiche joueur (à défaut, une estimation de {eur(TARIF_PAR_ENFANT)} est utilisée).
-        Les tarifs coachs ci-dessous varient d'un mois à l'autre — pense à les mettre à jour régulièrement.
+        Revenus joueurs = somme des tarifs mensuels réels renseignés sur chaque fiche joueur — aucune estimation automatique, un tarif manquant compte pour 0€ (et déclenche l'alerte ci-dessus). Ce chiffre n'est pas encore historisé mois par mois.
+        Revenus stages = inscrits × tarif (+ supplément hébergement le cas échéant) des stages dont la date de début tombe en {activeMois}.
+        Les prestations coachs et les autres dépenses, elles, sont bien propres au mois sélectionné ({activeMois}).
       </div>
 
-      <div style={styles.ckSection}>
-        <div style={styles.ckTitle}>Coachs & prestations du mois</div>
-        <button style={styles.ghostBtn} onClick={() => setCoachModal("new")}><Plus size={13} /> Ajouter un coach</button>
-      </div>
+      <div style={styles.ckSection}><div style={styles.ckTitle}>Prestations coachs · {activeMois}</div></div>
       <section style={styles.panel}>
-        {coachsList.length === 0 ? (
-          <div style={styles.emptyPanel}>Aucun coach enregistré.</div>
-        ) : coachsList.slice().sort((a, b) => b.tarifMensuel - a.tarifMensuel).map(c => (
-          <CoachRow key={c.id} c={c} eur={eur} onEdit={() => setCoachModal(c)} onDelete={() => removeCoach(c.id)} />
-        ))}
-      </section>
-
-      <div style={{ ...styles.ckSection, marginTop: 24 }}><div style={styles.ckTitle}>Dépenses récurrentes (mensuelles)</div></div>
-      <section style={styles.panel}>
-        {mensuelles.length === 0 ? (
-          <div style={styles.emptyPanel}>Aucune dépense mensuelle enregistrée.</div>
-        ) : mensuelles.map(d => (
+        {prestations.length === 0 ? (
+          <div style={styles.emptyPanel}>Aucune prestation enregistrée pour {activeMois}.</div>
+        ) : prestations.slice().sort((a, b) => b.montant - a.montant).map(d => (
           <DepenseRow key={d.id} d={d} eur={eur} onEdit={() => setModal(d)} onDelete={() => remove(d.id)} />
         ))}
       </section>
 
-      <div style={{ ...styles.ckSection, marginTop: 24 }}><div style={styles.ckTitle}>Dépenses ponctuelles</div></div>
+      <div style={{ ...styles.ckSection, marginTop: 24 }}><div style={styles.ckTitle}>Autres dépenses · {activeMois}</div></div>
       <section style={styles.panel}>
-        {ponctuelles.length === 0 ? (
-          <div style={styles.emptyPanel}>Aucune dépense ponctuelle enregistrée.</div>
-        ) : ponctuelles.map(d => (
-          <DepenseRow key={d.id} d={d} eur={eur} onEdit={() => setModal(d)} onDelete={() => remove(d.id)} showDate />
+        {autres.length === 0 ? (
+          <div style={styles.emptyPanel}>Aucune dépense enregistrée pour {activeMois}.</div>
+        ) : autres.map(d => (
+          <DepenseRow key={d.id} d={d} eur={eur} onEdit={() => setModal(d)} onDelete={() => remove(d.id)} />
         ))}
       </section>
 
       {modal && (
-        <DepenseModal initial={modal === "new" ? null : modal} onSave={upsert} onClose={() => setModal(null)} />
+        <DepenseModal initial={modal === "new" ? null : modal} defaultMois={activeMois} onSave={upsert} onClose={() => setModal(null)} />
       )}
-      {coachModal && (
-        <CoachModal initial={coachModal === "new" ? null : coachModal} onSave={upsertCoach} onClose={() => setCoachModal(null)} />
+
+      {showRecettes && (
+        <RecettesModal players={allPlayers} eur={eur} onClose={() => setShowRecettes(false)} />
+      )}
+
+      {showStages && (
+        <StagesRevenuModal stages={stagesMois} mois={activeMois} eur={eur} onClose={() => setShowStages(false)} />
       )}
 
       <footer style={styles.footer}>CADART Tennis Academy · Dépenses — enregistré automatiquement.</footer>
@@ -1503,72 +1653,98 @@ function DepensesView({ depenses, onSave, players, coachs, onSaveCoachs }) {
   );
 }
 
-function CoachRow({ c, eur, onEdit, onDelete }) {
-  const [confirm, setConfirm] = useState(false);
-  return (
-    <div style={styles.row}>
-      <span style={{ ...styles.avatar, background: `${T.green}18`, color: T.green, borderColor: `${T.green}33` }}>
-        {initials(c.nom)}
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 700 }}>{c.nom}</div>
-        <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>Prestation du mois</div>
-      </div>
-      <div style={{ fontSize: 14.5, fontWeight: 800, color: T.text, marginRight: 16 }}>{eur(c.tarifMensuel || 0)}</div>
-      <div style={{ display: "flex", gap: 4 }}>
-        {confirm ? (
-          <button style={{ ...styles.iconBtn, color: T.red, borderColor: `${T.red}55` }} onClick={onDelete} title="Confirmer"><Check size={14} /></button>
-        ) : (
-          <>
-            <button style={styles.iconBtn} onClick={onEdit} title="Modifier"><Pencil size={13} /></button>
-            <button style={styles.iconBtn} onClick={() => setConfirm(true)} title="Supprimer"><Trash2 size={13} /></button>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function CoachModal({ initial, onSave, onClose }) {
-  const [f, setF] = useState(initial || { id: "co" + Date.now(), nom: "", tarifMensuel: 0 });
-  const set = (k, v) => setF({ ...f, [k]: v });
-  const canSave = f.nom.trim().length > 0;
+function StagesRevenuModal({ stages, mois, eur, onClose }) {
+  const rows = (stages || []).map(s => {
+    const parts = (s.participants || []).map(x => (typeof x === "string" ? { nom: x, hebergement: false } : x));
+    const avecHeb = parts.filter(x => x.hebergement).length;
+    const revenu = parts.length * (s.tarif || 0) + avecHeb * (s.hebergementTarif || 0);
+    return { ...s, nbInscrits: parts.length, revenu };
+  }).sort((a, b) => b.revenu - a.revenu);
+  const total = rows.reduce((a, s) => a + s.revenu, 0);
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHead}>
-          <span style={styles.modalTitle}>{initial ? "Modifier le coach" : "Nouveau coach"}</span>
+          <div>
+            <span style={styles.modalTitle}>Revenus stages — {mois}</span>
+            <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{rows.length} stage{rows.length > 1 ? "s" : ""} · total {eur(total)}</div>
+          </div>
           <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
         </div>
         <div style={styles.modalBody}>
-          <Field label="Nom du coach" full>
-            <input style={styles.input} value={f.nom} placeholder="Prénom Nom" onChange={(e) => set("nom", e.target.value)} />
-          </Field>
-          <Field label="Tarif de ce mois (€)" full>
-            <input style={styles.input} type="number" value={f.tarifMensuel || 0} onChange={(e) => set("tarifMensuel", +e.target.value)} />
-          </Field>
-          <div style={{ fontSize: 11.5, color: T.dim, lineHeight: 1.5 }}>
-            Ce nom doit correspondre à celui utilisé dans le champ « Coach » des fiches joueurs, pour que le rendement par coach se calcule correctement.
-          </div>
-        </div>
-        <div style={styles.modalFoot}>
-          <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
-          <button style={{ ...styles.primaryBtn, opacity: canSave ? 1 : 0.5, cursor: canSave ? "pointer" : "not-allowed" }} onClick={() => canSave && onSave(f)}><Check size={16} /> Enregistrer</button>
+          {rows.length === 0 ? (
+            <div style={styles.miniEmpty}>Aucun stage ne commence en {mois}.</div>
+          ) : rows.map(s => (
+            <div key={s.id} style={styles.row}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{s.nom}</div>
+                <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>{s.du} → {s.au} · {s.nbInscrits} inscrit{s.nbInscrits > 1 ? "s" : ""} × {eur(s.tarif || 0)}</div>
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: T.text }}>{eur(s.revenu)}</div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
   );
 }
 
-function DepenseRow({ d, eur, onEdit, onDelete, showDate }) {
+function RecettesModal({ players, eur, onClose }) {
+  const sorted = (players || []).slice().sort((a, b) => {
+    const aOk = a.tarifMensuel > 0, bOk = b.tarifMensuel > 0;
+    if (aOk !== bOk) return aOk ? 1 : -1; // les joueurs sans tarif en premier
+    return (b.tarifMensuel || 0) - (a.tarifMensuel || 0);
+  });
+  const total = sorted.reduce((a, p) => a + (p.tarifMensuel || 0), 0);
+  const manquants = sorted.filter(p => !p.tarifMensuel || p.tarifMensuel <= 0).length;
+  return (
+    <div style={styles.overlay} onClick={onClose}>
+      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHead}>
+          <div>
+            <span style={styles.modalTitle}>Détail des recettes joueurs</span>
+            <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{sorted.length} joueurs · total {eur(total)}</div>
+          </div>
+          <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div style={styles.modalBody}>
+          {manquants > 0 && (
+            <div style={{ background: `${T.red}14`, border: `1px solid ${T.red}44`, color: T.red, borderRadius: 10, padding: "10px 14px", fontSize: 12.5, fontWeight: 600, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
+              <AlertTriangle size={15} /> {manquants} joueur{manquants > 1 ? "s" : ""} sans tarif renseigné — corrige leur fiche (bouton Modifier).
+            </div>
+          )}
+          {sorted.length === 0 ? (
+            <div style={styles.miniEmpty}>Aucun joueur enregistré.</div>
+          ) : sorted.map(p => {
+            const missing = !p.tarifMensuel || p.tarifMensuel <= 0;
+            return (
+              <div key={p.id} style={{ ...styles.row, ...(missing ? { background: `${T.red}0d`, borderRadius: 8 } : {}) }}>
+                <span style={{ ...styles.avatarSm, background: missing ? `${T.red}18` : `${T.green}18`, color: missing ? T.red : T.green, borderColor: missing ? `${T.red}33` : `${T.green}33` }}>
+                  {initials(p.name)}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>{p.name}</div>
+                  {missing && <div style={{ fontSize: 11, color: T.red, marginTop: 1 }}>Tarif non renseigné</div>}
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: missing ? T.red : T.text }}>
+                  {missing ? "⚠️ 0€" : eur(p.tarifMensuel)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DepenseRow({ d, eur, onEdit, onDelete }) {
   const [confirm, setConfirm] = useState(false);
   return (
     <div style={styles.row}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700 }}>{d.libelle}</div>
-        <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>
-          {d.categorie}{showDate && d.date ? ` · ${d.date}` : ""}{d.frequence === "annuelle" ? " · annuelle" : ""}
-        </div>
+        <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>{d.categorie}</div>
       </div>
       <div style={{ fontSize: 14.5, fontWeight: 800, color: T.text, marginRight: 16 }}>{eur(d.montant || 0)}</div>
       <div style={{ display: "flex", gap: 4 }}>
@@ -1585,12 +1761,12 @@ function DepenseRow({ d, eur, onEdit, onDelete, showDate }) {
   );
 }
 
-function DepenseModal({ initial, onSave, onClose }) {
+function DepenseModal({ initial, defaultMois, onSave, onClose }) {
   const [f, setF] = useState(initial || {
-    id: "dep" + Date.now(), categorie: DEPENSES_CATEGORIES[0], libelle: "", montant: 0, frequence: "mensuelle", date: "",
+    id: "dep" + Date.now(), mois: defaultMois || moisLabelNow(), categorie: DEPENSES_CATEGORIES[0], libelle: "", montant: 0,
   });
   const set = (k, v) => setF({ ...f, [k]: v });
-  const canSave = f.libelle.trim().length > 0 && f.montant > 0;
+  const canSave = f.libelle.trim().length > 0 && f.montant > 0 && f.mois && f.mois.trim().length > 0;
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -1599,25 +1775,25 @@ function DepenseModal({ initial, onSave, onClose }) {
           <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
         </div>
         <div style={styles.modalBody}>
-          <Field label="Libellé" full>
-            <input style={styles.input} value={f.libelle} placeholder="Location des courts" onChange={(e) => set("libelle", e.target.value)} />
-          </Field>
           <div style={styles.grid2}>
+            <Field label="Mois">
+              <input style={styles.input} value={f.mois || ""} placeholder="Juillet 2026" onChange={(e) => set("mois", e.target.value)} />
+            </Field>
             <Field label="Catégorie">
               <Select value={f.categorie} onChange={(v) => set("categorie", v)} options={DEPENSES_CATEGORIES.map(c => [c, c])} />
             </Field>
-            <Field label="Montant (€)">
-              <input style={styles.input} type="number" value={f.montant} onChange={(e) => set("montant", +e.target.value)} />
-            </Field>
           </div>
-          <div style={styles.grid2}>
-            <Field label="Fréquence">
-              <Select value={f.frequence} onChange={(v) => set("frequence", v)} options={[["mensuelle", "Mensuelle"], ["ponctuelle", "Ponctuelle"], ["annuelle", "Annuelle"]]} />
-            </Field>
-            {f.frequence !== "mensuelle" && (
-              <Field label="Date"><input style={styles.input} value={f.date || ""} placeholder="15/09/2026" onChange={(e) => set("date", e.target.value)} /></Field>
-            )}
-          </div>
+          <Field label={f.categorie === "Prestations coachs" ? "Nom du coach" : "Libellé"} full>
+            <input style={styles.input} value={f.libelle} placeholder={f.categorie === "Prestations coachs" ? "Prénom Nom" : "Location des courts"} onChange={(e) => set("libelle", e.target.value)} />
+          </Field>
+          <Field label="Montant (€)" full>
+            <input style={styles.input} type="number" value={f.montant} onChange={(e) => set("montant", +e.target.value)} />
+          </Field>
+          {f.categorie === "Prestations coachs" && (
+            <div style={{ fontSize: 11.5, color: T.dim, lineHeight: 1.5 }}>
+              Ce nom doit correspondre à celui utilisé dans le champ « Coach » des fiches joueurs, pour que le rendement par coach se calcule correctement.
+            </div>
+          )}
         </div>
         <div style={styles.modalFoot}>
           <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
@@ -1794,7 +1970,7 @@ function StageModal({ initial, onSave, onClose }) {
   );
 }
 
-function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGroups, onOpenPlayer, onGoPlanning, coachs }) {
+function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGroups, onOpenPlayer, onGoPlanning, depenses }) {
   const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
   const joueurs = players.length;
   const seances = players.filter(p => p.session && p.session.time && p.session.status !== "competition").length;
@@ -1837,10 +2013,10 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
     if (!coachMap[coachName]) coachMap[coachName] = [];
     coachMap[coachName].push(p);
   });
-  const coachsList = coachs || [];
+  const prestationsCoachs = dernieresPrestationsCoachs(depenses);
   const coachRendement = Object.entries(coachMap).map(([name, list]) => {
-    const revenu = list.reduce((a, p) => a + (p.tarifMensuel || TARIF_PAR_ENFANT), 0);
-    const salaire = (coachsList.find(c => c.nom === name) || {}).tarifMensuel || 0;
+    const revenu = list.reduce((a, p) => a + (p.tarifMensuel || 0), 0);
+    const salaire = prestationsCoachs[name] || 0;
     const rendement = revenu - salaire;
     const margePct = revenu ? Math.round((rendement / revenu) * 100) : 0;
     return { name, nbEnfants: list.length, revenu, salaire, rendement, margePct };
@@ -2012,7 +2188,7 @@ function JoueursView({ analyzed, onOpen, onEdit, onDelete, onAdd }) {
   );
 }
 
-function Sidebar({ active = "dashboard", onNavigate, onLogout }) {
+function Sidebar({ active = "dashboard", onNavigate, onLogout, adminEmail }) {
   const nav = [
     { key: "dashboard", icon: LayoutDashboard, label: "Tableau de bord", nav: true },
     { key: "joueurs", icon: UserRound, label: "Joueurs", nav: true },
@@ -2050,6 +2226,11 @@ function Sidebar({ active = "dashboard", onNavigate, onLogout }) {
       </nav>
 
       <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
+        {adminEmail && (
+          <div style={{ fontSize: 11, color: T.dim, padding: "0 4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            Connecté : {adminEmail}
+          </div>
+        )}
         {onLogout && (
           <button style={{ ...styles.ghostBtn, justifyContent: "center" }} onClick={onLogout}>
             <ArrowLeft size={14} /> Déconnexion
@@ -2854,6 +3035,160 @@ function downloadBytes(byteString, filename) {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function generateBilanAnnuelPdf(depenses, stages, players) {
+  const dList = depenses || [];
+  const sList = stages || [];
+  const pList = players || [];
+
+  // Tous les mois connus : ceux qui ont des dépenses + ceux où un stage démarre
+  const moisSet = new Set(dList.map(d => d.mois).filter(Boolean));
+  sList.forEach(s => { const d = parseFRDate(s.du); if (d) moisSet.add(moisLabelFromDate(d)); });
+  const moisListe = [...moisSet].sort((a, b) => moisSortKey(a) - moisSortKey(b));
+
+  const rows = moisListe.map(m => {
+    const depMois = dList.filter(d => d.mois === m);
+    const prestations = depMois.filter(d => d.categorie === "Prestations coachs").reduce((a, d) => a + (d.montant || 0), 0);
+    const autres = depMois.filter(d => d.categorie !== "Prestations coachs").reduce((a, d) => a + (d.montant || 0), 0);
+    const revenuStages = caStagesMois(sList, m);
+    return { mois: m, prestations, autres, totalDepenses: prestations + autres, revenuStages };
+  });
+  const totalPrestations = rows.reduce((a, r) => a + r.prestations, 0);
+  const totalAutres = rows.reduce((a, r) => a + r.autres, 0);
+  const totalDepenses = totalPrestations + totalAutres;
+  const totalStages = rows.reduce((a, r) => a + r.revenuStages, 0);
+
+  // Répartition annuelle des "autres dépenses" par catégorie
+  const parCategorie = {};
+  dList.filter(d => d.categorie !== "Prestations coachs" && moisSet.has(d.mois)).forEach(d => {
+    parCategorie[d.categorie] = (parCategorie[d.categorie] || 0) + (d.montant || 0);
+  });
+  const categorieRows = Object.entries(parCategorie).sort((a, b) => b[1] - a[1]);
+
+  const revenuJoueursActuel = pList.reduce((a, p) => a + (p.tarifMensuel || 0), 0);
+  const playersSansTarif = pList.filter(p => !p.tarifMensuel || p.tarifMensuel <= 0);
+
+  const pageW = 595, pageH = 842, marginX = 44;
+  const ops = [];
+  const toPdfY = (yTop) => pageH - yTop;
+  const setColor = (hex) => { const [r, g, b] = hexToRgb(hex).map(v => (v / 255).toFixed(3)); ops.push(`${r} ${g} ${b} rg`); };
+  const text = (x, yTop, size, str, hex = "#141414", bold = false) => {
+    setColor(hex);
+    ops.push(`BT ${bold ? "/F2" : "/F1"} ${size} Tf ${x.toFixed(2)} ${toPdfY(yTop).toFixed(2)} Td ${pdfStringLiteral(str)} Tj ET`);
+  };
+  const textRight = (xRight, yTop, size, str, hex = "#141414", bold = false) => text(xRight - approxTextWidth(str, size, bold), yTop, size, str, hex, bold);
+  const rectTop = (x, yTop, w, h, hex) => { setColor(hex); ops.push(`${x.toFixed(2)} ${(toPdfY(yTop) - h).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re f`); };
+  const hLine = (x, yTop, w, hex, thickness = 1) => rectTop(x, yTop, w, thickness, hex);
+
+  const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
+  let y = 56;
+
+  // En-tête
+  text(marginX, y, 17, "CADART Tennis Academy", "#141414", true);
+  const periode = moisListe.length ? `${moisListe[0]} \u2192 ${moisListe[moisListe.length - 1]}` : "aucune donnée";
+  text(marginX, y + 16, 11, `Bilan annuel — ${periode}`, "#646464");
+  textRight(pageW - marginX, y, 10, `Généré le ${todayLabel()}`, "#828282");
+  y += 32;
+  hLine(marginX, y, pageW - marginX * 2, "#141414", 1.2);
+  y += 24;
+
+  // Synthèse
+  text(marginX, y, 10, "SYNTHÈSE DE LA PÉRIODE", "#646464", true);
+  y += 18;
+  const synthese = [
+    ["Prestations coachs", eur(totalPrestations)],
+    ["Autres dépenses", eur(totalAutres)],
+    ["Total dépenses", eur(totalDepenses)],
+    ["Revenus stages", eur(totalStages)],
+  ];
+  const colW = (pageW - marginX * 2) / synthese.length;
+  synthese.forEach(([label, val], i) => {
+    const x = marginX + i * colW;
+    text(x, y, 8.5, label, "#828282");
+    text(x, y + 16, 12.5, val, "#141414", true);
+  });
+  y += 40;
+
+  // Tableau mois par mois
+  text(marginX, y, 10, "DÉTAIL MOIS PAR MOIS", "#646464", true);
+  y += 16;
+  const cols = [
+    { label: "Mois", w: 130 },
+    { label: "Prestations coachs", w: 105 },
+    { label: "Autres dépenses", w: 100 },
+    { label: "Total dépenses", w: 95 },
+    { label: "Revenus stages", w: 77 },
+  ];
+  let x0 = marginX;
+  const colX = cols.map(c => { const x = x0; x0 += c.w; return x; });
+  rectTop(marginX, y, pageW - marginX * 2, 18, "#f0f0f0");
+  cols.forEach((c, i) => text(colX[i] + 4, y + 13, 8.5, c.label, "#646464", true));
+  y += 18;
+  rows.forEach((r, i) => {
+    if (i % 2 === 1) rectTop(marginX, y, pageW - marginX * 2, 16, "#f7f7f7");
+    text(colX[0] + 4, y + 11, 9, r.mois, "#1e1e1e");
+    text(colX[1] + 4, y + 11, 9, eur(r.prestations), "#1e1e1e");
+    text(colX[2] + 4, y + 11, 9, eur(r.autres), "#1e1e1e");
+    text(colX[3] + 4, y + 11, 9, eur(r.totalDepenses), "#1e1e1e", true);
+    text(colX[4] + 4, y + 11, 9, eur(r.revenuStages), "#1c9e56");
+    y += 16;
+  });
+  hLine(marginX, y, pageW - marginX * 2, "#141414", 0.8);
+  y += 4;
+  text(colX[0] + 4, y + 11, 9, "TOTAL", "#141414", true);
+  text(colX[1] + 4, y + 11, 9, eur(totalPrestations), "#141414", true);
+  text(colX[2] + 4, y + 11, 9, eur(totalAutres), "#141414", true);
+  text(colX[3] + 4, y + 11, 9, eur(totalDepenses), "#141414", true);
+  text(colX[4] + 4, y + 11, 9, eur(totalStages), "#1c9e56", true);
+  y += 30;
+
+  // Répartition par catégorie
+  if (categorieRows.length > 0) {
+    text(marginX, y, 10, "RÉPARTITION DES AUTRES DÉPENSES PAR CATÉGORIE", "#646464", true);
+    y += 16;
+    categorieRows.forEach(([cat, montant]) => {
+      text(marginX, y, 9.5, cat, "#5a5a5a");
+      textRight(pageW - marginX, y, 9.5, eur(montant), "#141414", true);
+      y += 15;
+    });
+    y += 14;
+  }
+
+  // Note revenus joueurs
+  text(marginX, y, 10, "REVENUS JOUEURS (COTISATIONS)", "#646464", true);
+  y += 16;
+  const noteLines = wrapTextToWidth(
+    `Chiffre actuel (non historisé mois par mois) : ${eur(revenuJoueursActuel)} pour ${pList.length} joueurs. ` +
+    (playersSansTarif.length > 0
+      ? `Attention : ${playersSansTarif.length} joueur(s) sans tarif renseigné, non comptabilisé(s) dans ce montant.`
+      : `Tous les joueurs ont un tarif renseigné.`),
+    9.5, false, pageW - marginX * 2
+  );
+  noteLines.forEach(line => { text(marginX, y, 9.5, line, "#5a5a5a"); y += 14; });
+
+  // Pied de page
+  hLine(marginX, 790, pageW - marginX * 2, "#d2d2d2", 0.6);
+  text(marginX, 802, 8, "Document généré automatiquement à usage du comptable — à vérifier et compléter avec les pièces comptables officielles.", "#969696");
+
+  const contentStream = ops.join("\n");
+  const obj1 = `1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n`;
+  const obj2 = `2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n`;
+  const obj3 = `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /Font << /F1 4 0 R /F2 6 0 R >> >> /Contents 5 0 R >>\nendobj\n`;
+  const obj4 = `4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n`;
+  const obj5 = `5 0 obj\n<< /Length ${contentStream.length} >>\nstream\n${contentStream}\nendstream\nendobj\n`;
+  const obj6 = `6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>\nendobj\n`;
+
+  let body = "%PDF-1.4\n";
+  const offsets = [];
+  [obj1, obj2, obj3, obj4, obj5, obj6].forEach(obj => { offsets.push(body.length); body += obj; });
+  const xrefStart = body.length;
+  let xref = `xref\n0 7\n0000000000 65535 f \n`;
+  offsets.forEach(off => { xref += String(off).padStart(10, "0") + " 00000 n \n"; });
+  const trailer = `trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  body += xref + trailer;
+
+  downloadBytes(body, `Bilan_annuel_CADART_${todayLabel().replace(/[^a-z0-9]+/gi, "_")}.pdf`);
 }
 
 function generateMonthlyReportPdf(player, detail, rapport) {
