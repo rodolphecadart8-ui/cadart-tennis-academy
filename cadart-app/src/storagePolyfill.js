@@ -36,6 +36,7 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY) {
     "Les données ne pourront pas être sauvegardées tant qu'elles ne sont pas définies (voir Vercel → Settings → Environment Variables)."
   );
 }
+export { supabase };
 
 const LOCAL_PREFIX = "cadart:";
 const isLocalOnlyKey = (key) => key.includes("session");
