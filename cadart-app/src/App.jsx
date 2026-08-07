@@ -109,6 +109,7 @@ const defaultDetail = {
   dob: "", height: "—", weight: "—", hand: "Droitier",
   atp: "–", indice: 80, indiceDelta: 0, topPct: "Top 25%", categorie: "U18",
   raquette: "", cordage: "", coachReferent: "",
+  etablissement: "", classeScolaire: "", amenagementHoraire: "", bulletinsScolaires: [],
   radar: { Service: 80, Retour: 80, Mental: 80, Physique: 80, "Ph. de jeu": 80, Puissance: 80, Régularité: 80, Déplacement: 80 },
   technique: { Service: 80, Volée: 80, Retour: 80, Déplacement: 80, "Coup droit": 80, "Jeu de jambes": 80, Revers: 80, Régularité: 80 },
   physique: { Vitesse: 80, Mobilité: 80, Puissance: 80, Équilibre: 80, Endurance: 80, Force: 80, Réactivité: 80, Explosivité: 80 },
@@ -2735,20 +2736,52 @@ function MetricRow({ label, value, unit, max, bench }) {
   );
 }
 
-function ScoreBlock({ title, data, bench }) {
+function ScoreBlock({ title, data, bench, onEdit }) {
   return (
     <div style={styles.pcard}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
         <div style={{ ...styles.pcardTitle, marginBottom: 0 }}>{title}</div>
-        {bench && (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10.5, color: T.dim }}>
-            <span style={{ width: 2, height: 12, background: T.text, opacity: 0.85, display: "inline-block" }} />
-            Top 50 mondial
-          </span>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {bench && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10.5, color: T.dim }}>
+              <span style={{ width: 2, height: 12, background: T.text, opacity: 0.85, display: "inline-block" }} />
+              Top 50 mondial
+            </span>
+          )}
+          {onEdit && <button style={styles.iconBtn} onClick={onEdit} title="Modifier les scores"><Pencil size={13} /></button>}
+        </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 22px" }}>
         {Object.entries(data).map(([k, v]) => <ScoreRow key={k} label={k} value={v} bench={bench ? bench[k] : null} />)}
+      </div>
+    </div>
+  );
+}
+
+function ScoreEditModal({ title, data, onSave, onClose }) {
+  const [values, setValues] = useState({ ...data });
+  const set = (k, v) => setValues({ ...values, [k]: Math.max(0, Math.min(100, +v)) });
+  return (
+    <div style={styles.overlay} onClick={onClose}>
+      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHead}>
+          <span style={styles.modalTitle}>Modifier — {title}</span>
+          <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div style={styles.modalBody}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            {Object.entries(values).map(([k, v]) => (
+              <Field key={k} label={k}>
+                <input style={styles.input} type="number" min={0} max={100} value={v} onChange={(e) => set(k, e.target.value)} />
+              </Field>
+            ))}
+          </div>
+          <div style={{ fontSize: 11.5, color: T.dim, marginTop: 4 }}>Chaque score est sur 100 — le repère « Top 50 mondial » se compare automatiquement.</div>
+        </div>
+        <div style={styles.modalFoot}>
+          <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
+          <button style={styles.primaryBtn} onClick={() => onSave(values)}><Check size={16} /> Enregistrer</button>
+        </div>
       </div>
     </div>
   );
@@ -2962,7 +2995,7 @@ function generateMonthlyReportPdf(player, detail, rapport) {
 }
 
 
-function DocList({ title, items, onChange, kind, emptyLabel }) {
+function DocList({ title, items, onChange, kind, emptyLabel, readOnly = false }) {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ titre: "", date: "", url: "" });
   const list = items || [];
@@ -2977,11 +3010,13 @@ function DocList({ title, items, onChange, kind, emptyLabel }) {
     <div style={styles.pcard}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
         <div style={{ ...styles.pcardTitle, marginBottom: 0 }}>{title}</div>
-        <button style={styles.smallBtn} onClick={() => setAdding(!adding)}>
-          {adding ? <X size={13} /> : <Plus size={13} />} {adding ? "Fermer" : "Ajouter"}
-        </button>
+        {!readOnly && (
+          <button style={styles.smallBtn} onClick={() => setAdding(!adding)}>
+            {adding ? <X size={13} /> : <Plus size={13} />} {adding ? "Fermer" : "Ajouter"}
+          </button>
+        )}
       </div>
-      {adding && (
+      {adding && !readOnly && (
         <div style={styles.addBox}>
           <input style={styles.input} placeholder={kind === "video" ? "Titre de la vidéo" : "Nom du document"} value={form.titre} onChange={(e) => setForm({ ...form, titre: e.target.value })} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 8 }}>
@@ -3001,7 +3036,7 @@ function DocList({ title, items, onChange, kind, emptyLabel }) {
             {i.date && <div style={{ fontSize: 11, color: T.dim }}>{i.date}</div>}
           </div>
           {i.url ? <a href={i.url} target="_blank" rel="noreferrer" style={styles.docOpen}>Ouvrir</a> : <span style={{ fontSize: 11, color: T.dim }}>lien à venir</span>}
-          <button style={styles.iconBtn} onClick={() => del(i.id)}><Trash2 size={13} /></button>
+          {!readOnly && <button style={styles.iconBtn} onClick={() => del(i.id)}><Trash2 size={13} /></button>}
         </div>
       ))}
     </div>
@@ -3069,6 +3104,8 @@ function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false 
   const removeRapport = (id) => updateDetail({ rapportsMensuels: (d.rapportsMensuels || []).filter(x => x.id !== id) });
 
   const [pdfLoadingId, setPdfLoadingId] = useState(null);
+  const [scoreEdit, setScoreEdit] = useState(null); // null | "technique" | "physique" | "mental"
+  const scoreEditLabels = { technique: "Analyse technique", physique: "Analyse physique", mental: "Analyse mentale" };
   const generatePdf = async (rapport) => {
     setPdfLoadingId(rapport.id);
     try {
@@ -3088,7 +3125,7 @@ function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false 
   const chargeData = d.charge.map((v, i) => ({ d: days[i] || `J${i + 1}`, v }));
   const chargeTotal = d.charge.reduce((a, b) => a + b, 0).toFixed(1);
   const st = statusMeta[p.session && p.session.status] || {};
-  const tabs = ["Aperçu", "Analyse détaillée", "Human Fab", "Physique", "Vidéos", "Résultats", "Santé", "Objectifs", "Rapports mensuels", "Historique"];
+  const tabs = ["Aperçu", "Analyse détaillée", "Human Fab", "Physique", "Vidéos", "Résultats", "Santé", "Scolarité", "Objectifs", "Rapports mensuels", "Historique"];
 
   return (
     <main style={styles.profileMain}>
@@ -3192,12 +3229,12 @@ function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false 
 
       {/* Analyses */}
       <div style={styles.analyseGrid}>
-        <ScoreBlock title="Analyse technique" data={d.technique} bench={TOP50.technique} />
-        <ScoreBlock title="Analyse physique" data={d.physique} bench={TOP50.physique} />
+        <ScoreBlock title="Analyse technique" data={d.technique} bench={TOP50.technique} onEdit={readOnly ? null : () => setScoreEdit("technique")} />
+        <ScoreBlock title="Analyse physique" data={d.physique} bench={TOP50.physique} onEdit={readOnly ? null : () => setScoreEdit("physique")} />
       </div>
 
       <div style={styles.analyseGrid}>
-        <ScoreBlock title="Analyse mentale" data={d.mental} bench={TOP50.mental} />
+        <ScoreBlock title="Analyse mentale" data={d.mental} bench={TOP50.mental} onEdit={readOnly ? null : () => setScoreEdit("mental")} />
         <div style={styles.pcard}>
           <div style={styles.pcardTitle}>Indicateurs clés</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
@@ -3314,16 +3351,50 @@ function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false 
       {tab === "Santé" && (
         <div style={styles.analyseGrid}>
           <BloodPanel items={d.analyses} onChange={(v) => updateDetail({ analyses: v })} />
-          <DocList title="Rapports du médecin" items={d.rapports} kind="file" emptyLabel="Aucun rapport enregistré." onChange={(v) => updateDetail({ rapports: v })} />
+          <DocList title="Rapports du médecin" items={d.rapports} kind="file" emptyLabel="Aucun rapport enregistré." onChange={(v) => updateDetail({ rapports: v })} readOnly={readOnly} />
+        </div>
+      )}
+
+      {tab === "Scolarité" && (
+        <div style={{ display: "grid", gap: 16 }}>
+          <div style={styles.pcard}>
+            <div style={styles.pcardTitle}>Informations scolaires</div>
+            {readOnly ? (
+              <div style={{ display: "flex", gap: 26, flexWrap: "wrap" }}>
+                <RankStat label="Établissement" value={d.etablissement || "—"} />
+                <RankStat label="Classe" value={d.classeScolaire || "—"} />
+                <RankStat label="Aménagement horaire" value={d.amenagementHoraire || "—"} />
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+                <div style={{ width: 220 }}>
+                  <Field label="Établissement">
+                    <input style={styles.input} value={d.etablissement || ""} placeholder="Collège / Lycée…" onChange={(e) => updateDetail({ etablissement: e.target.value })} />
+                  </Field>
+                </div>
+                <div style={{ width: 160 }}>
+                  <Field label="Classe">
+                    <input style={styles.input} value={d.classeScolaire || ""} placeholder="3ème, Seconde…" onChange={(e) => updateDetail({ classeScolaire: e.target.value })} />
+                  </Field>
+                </div>
+                <div style={{ width: 260 }}>
+                  <Field label="Aménagement horaire">
+                    <input style={styles.input} value={d.amenagementHoraire || ""} placeholder="Sport-études, CNED, aucun…" onChange={(e) => updateDetail({ amenagementHoraire: e.target.value })} />
+                  </Field>
+                </div>
+              </div>
+            )}
+          </div>
+          <DocList title="Bulletins scolaires" items={d.bulletinsScolaires} kind="file" emptyLabel="Aucun bulletin enregistré." onChange={(v) => updateDetail({ bulletinsScolaires: v })} readOnly={readOnly} />
         </div>
       )}
 
       {tab === "Vidéos" && (
-        <DocList title="Vidéos d'entraînement" items={d.videos} kind="video" emptyLabel="Aucune vidéo pour l'instant." onChange={(v) => updateDetail({ videos: v })} />
+        <DocList title="Vidéos d'entraînement" items={d.videos} kind="video" emptyLabel="Aucune vidéo pour l'instant." onChange={(v) => updateDetail({ videos: v })} readOnly={readOnly} />
       )}
 
       {tab === "Human Fab" && (
-        <DocList title="Fichiers Human Fab" items={d.humanFabDocs} kind="file" emptyLabel="Aucun fichier Human Fab." onChange={(v) => updateDetail({ humanFabDocs: v })} />
+        <DocList title="Fichiers Human Fab" items={d.humanFabDocs} kind="file" emptyLabel="Aucun fichier Human Fab." onChange={(v) => updateDetail({ humanFabDocs: v })} readOnly={readOnly} />
       )}
 
       {tab === "Rapports mensuels" && (
@@ -3416,7 +3487,7 @@ function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false 
         </div>
       )}
 
-      {!["Aperçu", "Santé", "Vidéos", "Human Fab", "Historique", "Rapports mensuels"].includes(tab) && (
+      {!["Aperçu", "Santé", "Vidéos", "Human Fab", "Historique", "Rapports mensuels", "Scolarité"].includes(tab) && (
         <div style={styles.pcard}>
           <div style={styles.pcardTitle}>{tab}</div>
           <div style={{ color: T.dim, fontSize: 13 }}>Section à venir — on la construira quand tu voudras.</div>
@@ -3428,6 +3499,15 @@ function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false 
           initial={rapportModal === "new" ? null : rapportModal}
           onSave={upsertRapport}
           onClose={() => setRapportModal(null)}
+        />
+      )}
+
+      {scoreEdit && (
+        <ScoreEditModal
+          title={scoreEditLabels[scoreEdit]}
+          data={d[scoreEdit]}
+          onSave={(values) => { updateDetail({ [scoreEdit]: values }); setScoreEdit(null); }}
+          onClose={() => setScoreEdit(null)}
         />
       )}
 
