@@ -115,6 +115,29 @@ const TOP50 = {
   mental: { Concentration: 93, "Gestion émotionnelle": 92, "Confiance en soi": 93, Combativité: 93 },
 };
 
+/* Score global d'un joueur : moyenne des 3 catégories (technique, physique, mental),
+   chacune pesant le même poids peu importe son nombre de sous-critères. */
+function moyenneCategorie(obj) {
+  if (!obj) return null;
+  const vals = Object.values(obj).filter(v => typeof v === "number");
+  if (vals.length === 0) return null;
+  return vals.reduce((a, v) => a + v, 0) / vals.length;
+}
+function scoreGlobal(detail) {
+  const d = detail || {};
+  const moyennes = [moyenneCategorie(d.technique), moyenneCategorie(d.physique), moyenneCategorie(d.mental)].filter(v => v != null);
+  if (moyennes.length === 0) return 0;
+  return Math.round(moyennes.reduce((a, v) => a + v, 0) / moyennes.length);
+}
+
+/* Ordre du classement français FFT, du meilleur (index 0) au moins bon */
+const FFT_ORDRE = ["-30", "-15", "-4/6", "-2/6", "0", "1/6", "2/6", "3/6", "4/6", "5/6", "15/5", "15/4", "15/3", "15/2", "15/1", "15", "30/5", "30/4", "30/3", "30/2", "30/1", "30", "40", "NC"];
+function classementRangIndex(val) {
+  if (!val || !val.trim()) return FFT_ORDRE.length + 1; // pas de classement renseigné = tout en bas
+  const idx = FFT_ORDRE.indexOf(val.trim());
+  return idx === -1 ? FFT_ORDRE.length : idx; // valeur non reconnue = juste avant "non renseigné"
+}
+
 /* Repères Top 50 mondial pour les 8 données clés du rapport mensuel (échelle réelle, pas /100) */
 const MONTHLY_METRICS = [
   { key: "vitesseService", label: "Vitesse service", unit: " km/h", max: 230, bench: 210 },
@@ -1042,7 +1065,7 @@ function CoachDashboard({ onLogout, adminEmail }) {
         <Cockpit
           players={players} analyzed={analyzed} priorities={priorities}
           competitionPlayers={competitionPlayers} facilityGroups={facilityGroups}
-          onOpenPlayer={openProfile} onGoPlanning={() => navigate("planning")} depenses={depenses}
+          onOpenPlayer={openProfile} onGoPlanning={() => navigate("planning")} depenses={depenses} stages={stages}
         />
       )}
 
@@ -1970,7 +1993,7 @@ function StageModal({ initial, onSave, onClose }) {
   );
 }
 
-function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGroups, onOpenPlayer, onGoPlanning, depenses }) {
+function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGroups, onOpenPlayer, onGoPlanning, depenses, stages }) {
   const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
   const joueurs = players.length;
   const seances = players.filter(p => p.session && p.session.time && p.session.status !== "competition").length;
@@ -1997,14 +2020,20 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
   const enProgression = players.filter(p => (p.detail && p.detail.indiceDelta > 0) || p.serviceTrend >= 8).length;
   const vitrine = [...players].sort((a, b) => (b.serviceTrend || 0) - (a.serviceTrend || 0)).filter(p => (p.serviceTrend || 0) > 0).slice(0, 3);
 
-  // Business (données d'exemple — à connecter aux vrais chiffres)
-  const ARPU = 320;
-  const caMois = joueurs * ARPU;
-  const objectif = Math.ceil(caMois * 1.1 / 500) * 500;
-  const caPct = objectif ? Math.round(caMois / objectif * 100) : 0;
-  const marge = Math.round(caMois * 0.22);
+  // Santé business — chiffres réels de Juin 2026 (tarifs joueurs + dépenses/prestations + revenus stages)
+  const MOIS_BUSINESS = "Juin 2026";
+  const revenuJoueurs = players.reduce((a, p) => a + (p.tarifMensuel || 0), 0);
+  const playersSansTarif = players.filter(p => !p.tarifMensuel || p.tarifMensuel <= 0).length;
+  const revenuStages = caStagesMois(stages, MOIS_BUSINESS);
+  const caMois = revenuJoueurs + revenuStages;
+  const depensesMois = (depenses || []).filter(d => d.mois === MOIS_BUSINESS);
+  const prestationsMois = depensesMois.filter(d => d.categorie === "Prestations coachs").reduce((a, d) => a + (d.montant || 0), 0);
+  const autresMois = depensesMois.filter(d => d.categorie !== "Prestations coachs").reduce((a, d) => a + (d.montant || 0), 0);
+  const marge = caMois - prestationsMois - autresMois;
+  const margePct = caMois ? Math.round((marge / caMois) * 100) : 0;
+  // Remplissage courts et impayés : pas encore de vraie source de données, restent estimés
   const impayesN = Math.max(1, Math.round(joueurs * 0.06));
-  const impayes = impayesN * ARPU;
+  const impayes = impayesN * (joueurs ? Math.round(revenuJoueurs / joueurs) : 0);
 
   // Rendement par coach : revenu des enfants gérés − prestation versée au coach
   const coachMap = {};
@@ -2032,59 +2061,33 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
         <button style={styles.primaryBtn} onClick={onGoPlanning}><CalendarDays size={16} /> Voir le planning</button>
       </header>
 
-      {/* 1. Santé business */}
-      <div style={styles.ckSection}>
+      {/* 1. Le pouls du jour */}
+      <div style={styles.ckSection}><div style={styles.ckTitle}>Le pouls du jour</div></div>
+      <div style={styles.kpiRow}>
+        <Stat icon={Activity} label="Séances aujourd'hui" value={seances} />
+        <Stat icon={FlaskConical} label="Tests prévus" value={tests} tint={T.blue} />
+        <Stat icon={AlertTriangle} label="Alertes actives" value={priorities.length} tint={priorities.length ? T.amber : T.dim} subColor={T.amber} />
+        <Stat icon={Trophy} label="En compétition" value={enComp} tint={T.blue} />
+      </div>
+
+      {/* 2. Santé business */}
+      <div style={{ ...styles.ckSection, marginTop: 28 }}>
         <div style={styles.ckTitle}>Santé business</div>
-        <span style={styles.ckNote}>données d'exemple — à connecter à tes vrais chiffres</span>
+        <span style={styles.ckNote}>CA & marge : chiffres réels de {MOIS_BUSINESS} · remplissage et impayés encore estimés</span>
       </div>
       <div style={styles.kpiRow}>
-        <Stat icon={Euro} label="CA du mois" value={eur(caMois)} sub={`Objectif ${eur(objectif)} · ${caPct}%`} subColor={caPct >= 90 ? T.green : T.amber} />
-        <Stat icon={Wallet} label="Marge estimée" value={eur(marge)} sub="≈ 22% du CA" />
-        <Stat icon={PieChart} label="Remplissage courts" value={`${remplissage}%`} sub={`${usedSlots}/${capacity} créneaux`} subColor={remplissage >= 75 ? T.green : T.amber} tint={remplissage >= 75 ? T.green : T.amber} />
-        <Stat icon={AlertTriangle} label="Impayés" value={eur(impayes)} sub={`${impayesN} joueur${impayesN > 1 ? "s" : ""} à relancer`} subColor={T.amber} tint={T.amber} />
-        <Stat icon={Euro} label="Revenu / joueur" value={eur(ARPU)} sub="par mois" subColor={T.mute} />
-      </div>
-
-      {/* Rendement par coach */}
-      <div style={styles.ckSection}>
-        <div style={styles.ckTitle}>Rendement par coach</div>
-        <span style={styles.ckNote}>revenu des enfants gérés − salaire versé au coach</span>
-      </div>
-      <section style={styles.panel}>
-        {coachRendement.length === 0 ? (
-          <div style={styles.emptyPanel}>Aucun coach assigné pour le moment.</div>
-        ) : coachRendement.map(c => (
-          <div key={c.name} style={styles.row}>
-            <span style={{ ...styles.avatar, background: `${T.green}18`, color: T.green, borderColor: `${T.green}33` }}>
-              {initials(c.name)}
-            </span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={styles.rowName}>{c.name}</div>
-              <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>
-                {c.nbEnfants} enfant{c.nbEnfants > 1 ? "s" : ""} · {eur(c.revenu)} générés · {eur(c.salaire)} versés
-              </div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 15, fontWeight: 800, color: c.rendement >= 0 ? T.green : T.red }}>
-                {c.rendement >= 0 ? "+" : ""}{eur(c.rendement)}
-              </div>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: T.mute, marginTop: 2 }}>{c.margePct}% de marge</div>
-            </div>
-          </div>
-        ))}
-      </section>
-
-      {/* 2. Effectif & fidélisation */}
-      <div style={styles.ckSection}><div style={styles.ckTitle}>Effectif &amp; fidélisation</div></div>
-      <div style={styles.kpiRow}>
-        <Stat icon={Users} label="Joueurs actifs" value={joueurs} sub="+4 ce mois" />
-        <Stat icon={Repeat} label="Taux de renouvellement" value="92%" sub="inscriptions" />
-        <Stat icon={UserPlus} label="Entrées ce mois" value="4" sub="nouveaux joueurs" />
-        <Stat icon={UserMinus} label="Départs ce mois" value="1" sub="à surveiller" subColor={T.amber} tint={T.amber} />
+        <Stat
+          icon={Euro} label={`CA · ${MOIS_BUSINESS}`} value={eur(caMois)}
+          sub={playersSansTarif > 0 ? `⚠️ ${playersSansTarif} joueur(s) sans tarif` : `${eur(revenuJoueurs)} joueurs + ${eur(revenuStages)} stages`}
+          subColor={playersSansTarif > 0 ? T.red : T.mute}
+        />
+        <Stat icon={Wallet} label={`Marge · ${MOIS_BUSINESS}`} value={eur(marge)} sub={caMois ? `${margePct}% du CA` : "—"} subColor={marge >= 0 ? T.green : T.red} tint={marge >= 0 ? T.green : T.red} />
+        <Stat icon={PieChart} label="Remplissage courts" value={`${remplissage}%`} sub={`${usedSlots}/${capacity} créneaux · estimé`} subColor={remplissage >= 75 ? T.green : T.amber} tint={remplissage >= 75 ? T.green : T.amber} />
+        <Stat icon={AlertTriangle} label="Impayés" value={eur(impayes)} sub={`${impayesN} joueur${impayesN > 1 ? "s" : ""} à relancer · estimé`} subColor={T.amber} tint={T.amber} />
       </div>
 
       {/* 3. Performance sportive */}
-      <div style={styles.ckSection}><div style={styles.ckTitle}>Performance sportive</div></div>
+      <div style={{ ...styles.ckSection, marginTop: 28 }}><div style={styles.ckTitle}>Performance sportive</div></div>
       <div style={styles.cols}>
         <div style={{ flex: 2, minWidth: 300 }}>
           <div style={styles.kpiRow}>
@@ -2105,16 +2108,47 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
         </section>
       </div>
 
-      {/* 4. Le pouls du jour */}
-      <div style={styles.ckSection}><div style={styles.ckTitle}>Le pouls du jour</div></div>
+      {/* 4. Effectif & fidélisation */}
+      <div style={{ ...styles.ckSection, marginTop: 28 }}><div style={styles.ckTitle}>Effectif &amp; fidélisation</div></div>
       <div style={styles.kpiRow}>
-        <Stat icon={Activity} label="Séances aujourd'hui" value={seances} />
-        <Stat icon={FlaskConical} label="Tests prévus" value={tests} tint={T.blue} />
-        <Stat icon={AlertTriangle} label="Alertes actives" value={priorities.length} tint={priorities.length ? T.amber : T.dim} subColor={T.amber} />
-        <Stat icon={Trophy} label="En compétition" value={enComp} tint={T.blue} />
+        <Stat icon={Users} label="Joueurs actifs" value={joueurs} sub="+4 ce mois" />
+        <Stat icon={Repeat} label="Taux de renouvellement" value="92%" sub="inscriptions" />
+        <Stat icon={UserPlus} label="Entrées ce mois" value="4" sub="nouveaux joueurs" />
+        <Stat icon={UserMinus} label="Départs ce mois" value="1" sub="à surveiller" subColor={T.amber} tint={T.amber} />
       </div>
 
-      <section style={{ ...styles.panel, marginTop: 16 }}>
+      {/* 5. Rendement par coach (version compacte) */}
+      <div style={{ ...styles.ckSection, marginTop: 28 }}>
+        <div style={{ ...styles.ckTitle, fontSize: 12 }}>Rendement par coach</div>
+        <span style={{ ...styles.ckNote, fontSize: 11 }}>revenu des enfants gérés − prestation versée au coach</span>
+      </div>
+      <section style={{ ...styles.panel, padding: 10 }}>
+        {coachRendement.length === 0 ? (
+          <div style={{ ...styles.emptyPanel, fontSize: 12.5, padding: "16px 0" }}>Aucun coach assigné pour le moment.</div>
+        ) : coachRendement.map(c => (
+          <div key={c.name} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 6px", borderBottom: `1px solid ${T.border}` }}>
+            <span style={{ ...styles.avatarSm, background: `${T.green}18`, color: T.green, borderColor: `${T.green}33` }}>
+              {initials(c.name)}
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600 }}>{c.name}</div>
+              <div style={{ fontSize: 10.5, color: T.mute, marginTop: 1 }}>
+                {c.nbEnfants} enfant{c.nbEnfants > 1 ? "s" : ""} · {eur(c.revenu)} générés · {eur(c.salaire)} versés
+              </div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 12.5, fontWeight: 800, color: c.rendement >= 0 ? T.green : T.red }}>
+                {c.rendement >= 0 ? "+" : ""}{eur(c.rendement)}
+              </div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: T.mute, marginTop: 1 }}>{c.margePct}% de marge</div>
+            </div>
+          </div>
+        ))}
+      </section>
+
+      {/* 6. Priorités du jour (en bas) */}
+      <div style={{ ...styles.ckSection, marginTop: 28 }}><div style={styles.ckTitle}>Priorités du jour</div></div>
+      <section style={styles.panel}>
         <div style={styles.panelHead}>
           <span style={styles.panelTitle}>Priorités du jour</span>
           <span onClick={onGoPlanning} style={{ fontSize: 12.5, fontWeight: 700, color: T.green, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -2146,9 +2180,18 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
 
 function JoueursView({ analyzed, onOpen, onEdit, onDelete, onAdd }) {
   const [q, setQ] = useState("");
-  const list = q.trim()
+  const [sortBy, setSortBy] = useState("nom");
+  const filtered = q.trim()
     ? analyzed.filter(p => p.name.toLowerCase().includes(q.trim().toLowerCase()))
     : analyzed;
+
+  const list = [...filtered].sort((a, b) => {
+    if (sortBy === "age") return (a.age || 0) - (b.age || 0);
+    if (sortBy === "classement") return classementRangIndex(a.classementFFT) - classementRangIndex(b.classementFFT);
+    if (sortBy === "score") return scoreGlobal(b.detail) - scoreGlobal(a.detail);
+    return a.name.localeCompare(b.name);
+  });
+
   return (
     <main style={styles.main}>
       <header style={styles.header}>
@@ -2162,6 +2205,11 @@ function JoueursView({ analyzed, onOpen, onEdit, onDelete, onAdd }) {
             placeholder="Rechercher un joueur…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
+          />
+          <Select
+            value={sortBy}
+            onChange={setSortBy}
+            options={[["nom", "Trier : nom (A-Z)"], ["age", "Trier : âge"], ["classement", "Trier : classement"], ["score", "Trier : meilleur score"]]}
           />
           <button style={styles.primaryBtn} onClick={onAdd}><Plus size={17} /> Ajouter un joueur</button>
         </div>
@@ -2191,8 +2239,8 @@ function JoueursView({ analyzed, onOpen, onEdit, onDelete, onAdd }) {
 function Sidebar({ active = "dashboard", onNavigate, onLogout, adminEmail }) {
   const nav = [
     { key: "dashboard", icon: LayoutDashboard, label: "Tableau de bord", nav: true },
-    { key: "joueurs", icon: UserRound, label: "Joueurs", nav: true },
     { key: "planning", icon: CalendarDays, label: "Planning", nav: true },
+    { key: "joueurs", icon: UserRound, label: "Joueurs", nav: true },
     { key: "stages", icon: Tent, label: "Stages", nav: true },
     { key: "depenses", icon: Wallet, label: "Dépenses", nav: true },
     { key: "ia", icon: Sparkles, label: "Assistant IA", nav: true },
@@ -2406,8 +2454,8 @@ function Signal({ icon: Icon, value, unit, warn }) {
 
 function RankBadges({ p }) {
   const badges = [];
+  if (p.classementFFT) badges.push(["FR", p.classementFFT]);
   if (p.utr) badges.push(["UTR", p.utr]);
-  if (p.itf) badges.push(["ITF", p.itf]);
   if (badges.length === 0) return null;
   return (
     <span style={{ display: "inline-flex", gap: 5, flexShrink: 0 }}>
@@ -2476,6 +2524,20 @@ function PlayerRow({ p, onOpen, onEdit, onDelete }) {
           </span>
         </div>
         <div style={{ marginTop: 7 }}><FocusChip p={p} /></div>
+      </div>
+
+      {/* Score global (technique + physique + mental) */}
+      <div style={{ width: 68, textAlign: "right" }}>
+        {(() => {
+          const sg = scoreGlobal(p.detail);
+          const color = sg >= 85 ? T.green : sg >= 70 ? T.amber : T.red;
+          return (
+            <>
+              <div style={{ fontSize: 15, fontWeight: 800, color }}>{sg}</div>
+              <div style={{ fontSize: 9.5, color: T.dim, textTransform: "uppercase", letterSpacing: 0.3 }}>Score</div>
+            </>
+          );
+        })()}
       </div>
 
       {/* Forme */}
