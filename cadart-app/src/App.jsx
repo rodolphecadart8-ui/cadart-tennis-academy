@@ -1165,6 +1165,10 @@ function CoachDashboard({ onLogout, adminEmail }) {
         <StagesView stages={stages} onSave={commitStages} />
       )}
 
+      {view === "stagiaires" && (
+        <StagiairesView stages={stages} onSaveStages={commitStages} />
+      )}
+
       {view === "depenses" && (
         <DepensesView depenses={depenses} onSave={commitDepenses} players={players} stages={stages} />
       )}
@@ -1829,20 +1833,227 @@ function DepenseModal({ initial, defaultMois, onSave, onClose }) {
 
 const STAGE_TYPE_COLOR = { Perfectionnement: T.green, Compétition: T.blue, Initiation: T.amber, Adulte: "#b98cff", "Multi-activités": T.mute, "Haut niveau": T.red, Data: "#4d9fff" };
 
+/* ============================================================
+   STAGIAIRES — annuaire centralisé (tous stages confondus)
+   ============================================================ */
+function agregerStagiaires(stages) {
+  const map = new Map(); // clé = email en minuscule, ou "nom complet" en minuscule si pas d'email
+  (stages || []).forEach(s => {
+    const parts = (s.participants || []).map(p => (typeof p === "string" ? { nom: p, hebergement: false } : p));
+    parts.forEach(p => {
+      const nomComplet = ((p.prenom || "") + " " + (p.nom || "")).trim() || "—";
+      const cle = (p.email && p.email.trim().toLowerCase()) || nomComplet.toLowerCase();
+      if (!map.has(cle)) {
+        map.set(cle, {
+          cle, prenom: p.prenom || "", nom: p.nom || "", nomComplet,
+          classement: p.classement || "", age: p.age || null, objectifs: p.objectifs || "",
+          email: p.email || "", telephone: p.telephone || "",
+          stages: [],
+        });
+      }
+      const entry = map.get(cle);
+      // Complète les champs manquants avec les infos les plus récentes trouvées
+      if (!entry.classement && p.classement) entry.classement = p.classement;
+      if (!entry.age && p.age) entry.age = p.age;
+      if (!entry.objectifs && p.objectifs) entry.objectifs = p.objectifs;
+      if (!entry.email && p.email) entry.email = p.email;
+      if (!entry.telephone && p.telephone) entry.telephone = p.telephone;
+      entry.stages.push({ nom: s.nom, du: s.du, hebergement: !!p.hebergement, dateArrivee: p.dateArrivee || "", dateDepart: p.dateDepart || "" });
+    });
+  });
+  return [...map.values()].sort((a, b) => a.nomComplet.localeCompare(b.nomComplet));
+}
+
+function StagiairesView({ stages, onSaveStages }) {
+  const [q, setQ] = useState("");
+  const [selected, setSelected] = useState(() => new Set());
+  const [editing, setEditing] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  const all = useMemo(() => agregerStagiaires(stages), [stages]);
+  const list = q.trim() ? all.filter(p => p.nomComplet.toLowerCase().includes(q.trim().toLowerCase())) : all;
+
+  const toggleSel = (cle) => {
+    const next = new Set(selected);
+    next.has(cle) ? next.delete(cle) : next.add(cle);
+    setSelected(next);
+  };
+  const toggleAll = () => {
+    if (selected.size === list.length) setSelected(new Set());
+    else setSelected(new Set(list.map(p => p.cle)));
+  };
+
+  const emailsSelectionnes = list.filter(p => selected.has(p.cle) && p.email).map(p => p.email);
+  const sansEmail = list.filter(p => selected.has(p.cle) && !p.email).length;
+
+  const copierEmails = () => {
+    try { navigator.clipboard.writeText(emailsSelectionnes.join(", ")); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch (e) { /* clipboard indispo */ }
+  };
+  const mailtoHref = `mailto:?bcc=${encodeURIComponent(emailsSelectionnes.join(","))}&subject=${encodeURIComponent("Actus CADART Tennis Academy")}`;
+
+  const exportCSV = () => {
+    const header = "prenom,nom,classement,age,email,telephone\n";
+    const rows = list.map(p => [p.prenom, p.nom, p.classement, p.age || "", p.email, p.telephone].map(v => `"${(v || "").toString().replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([header + rows], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "stagiaires_cadart.csv";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  };
+
+  // Sauvegarde les coordonnées d'un stagiaire sur TOUTES ses occurrences (toutes semaines/stages confondus)
+  const saveContact = (cle, data) => {
+    const nomMatch = (p) => {
+      const nomComplet = ((p.prenom || "") + " " + (p.nom || "")).trim().toLowerCase();
+      const keyMatch = (p.email && p.email.trim().toLowerCase()) === cle || nomComplet === cle;
+      return keyMatch;
+    };
+    const nextStages = (stages || []).map(s => {
+      const parts = (s.participants || []).map(p => (typeof p === "string" ? { nom: p, hebergement: false } : p));
+      const nextParts = parts.map(p => (nomMatch(p) ? { ...p, ...data } : p));
+      return { ...s, participants: nextParts };
+    });
+    onSaveStages(nextStages);
+    setEditing(null);
+  };
+
+  return (
+    <main style={styles.main}>
+      <header style={styles.header}>
+        <div>
+          <div style={styles.h1}>Stagiaires</div>
+          <div style={styles.sub}>{all.length} stagiaire{all.length > 1 ? "s" : ""} · tous stages confondus</div>
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button style={styles.ghostBtn} onClick={exportCSV}><FileDown size={15} /> Exporter CSV</button>
+        </div>
+      </header>
+
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
+        <input style={{ ...styles.input, width: 240 }} placeholder="Rechercher un stagiaire…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button style={styles.ghostBtn} onClick={toggleAll}>{selected.size === list.length && list.length > 0 ? "Tout désélectionner" : "Tout sélectionner"}</button>
+        <span style={{ fontSize: 12, color: T.mute }}>{selected.size} sélectionné{selected.size > 1 ? "s" : ""}</span>
+        {selected.size > 0 && (
+          <>
+            <a href={mailtoHref} style={{ ...styles.primaryBtn, textDecoration: "none" }}><Send size={15} /> Envoyer un email ({emailsSelectionnes.length})</a>
+            <button style={styles.ghostBtn} onClick={copierEmails}>{copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Copié" : "Copier les emails"}</button>
+            {sansEmail > 0 && <span style={{ fontSize: 11.5, color: T.amber, fontWeight: 700 }}>⚠️ {sansEmail} sans email</span>}
+          </>
+        )}
+      </div>
+
+      <section style={styles.panel}>
+        {list.length === 0 ? (
+          <div style={styles.emptyPanel}>Aucun stagiaire pour l'instant — inscris-en un depuis l'onglet Stages.</div>
+        ) : list.map(p => (
+          <div key={p.cle} style={styles.row}>
+            <input type="checkbox" checked={selected.has(p.cle)} onChange={() => toggleSel(p.cle)} style={{ width: 16, height: 16, flexShrink: 0 }} />
+            <span style={{ ...styles.avatarSm, background: `${T.green}18`, color: T.green, borderColor: `${T.green}33` }}>{initials(p.nomComplet)}</span>
+            <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => setEditing(p)}>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>
+                {p.nomComplet} {p.classement && <span style={{ color: T.mute, fontWeight: 500 }}>· {p.classement}</span>}{p.age && <span style={{ color: T.mute, fontWeight: 500 }}> · {p.age} ans</span>}
+              </div>
+              <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>
+                {p.email || <span style={{ color: T.amber }}>pas d'email</span>}{p.telephone ? ` · ${p.telephone}` : ""} · {p.stages.length} stage{p.stages.length > 1 ? "s" : ""}
+              </div>
+            </div>
+            <button style={styles.iconBtn} onClick={() => setEditing(p)}><Pencil size={13} /></button>
+          </div>
+        ))}
+      </section>
+
+      {editing && (
+        <StagiaireContactModal
+          stagiaire={editing}
+          onSave={(data) => saveContact(editing.cle, data)}
+          onClose={() => setEditing(null)}
+        />
+      )}
+
+      <footer style={styles.footer}>CADART Tennis Academy · Stagiaires — annuaire centralisé, pratique pour tes envois mensuels.</footer>
+    </main>
+  );
+}
+
+function StagiaireContactModal({ stagiaire, onSave, onClose }) {
+  const [email, setEmail] = useState(stagiaire.email || "");
+  const [telephone, setTelephone] = useState(stagiaire.telephone || "");
+  return (
+    <div style={styles.overlay} onClick={onClose}>
+      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHead}>
+          <div>
+            <span style={styles.modalTitle}>{stagiaire.nomComplet}</span>
+            <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{stagiaire.stages.length} stage{stagiaire.stages.length > 1 ? "s" : ""} · {stagiaire.classement || "classement non renseigné"}</div>
+          </div>
+          <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div style={styles.modalBody}>
+          <Field label="Email" full>
+            <input style={styles.input} type="email" value={email} placeholder="parent@email.fr" onChange={(e) => setEmail(e.target.value)} />
+          </Field>
+          <Field label="Téléphone" full>
+            <input style={styles.input} value={telephone} placeholder="06 12 34 56 78" onChange={(e) => setTelephone(e.target.value)} />
+          </Field>
+          {stagiaire.objectifs && (
+            <div style={{ fontSize: 12, color: T.mute, background: T.bg2, borderRadius: 8, padding: 10, marginBottom: 10 }}>
+              <strong style={{ color: T.text }}>Objectifs :</strong> {stagiaire.objectifs}
+            </div>
+          )}
+          {stagiaire.stages.some(st => st.hebergement) && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: T.dim, marginBottom: 6 }}>
+                <Home size={12} style={{ verticalAlign: -2, marginRight: 4 }} color={T.blue} /> Dates hébergement (pour réservation hôtel)
+              </div>
+              {stagiaire.stages.filter(st => st.hebergement).map((st, i) => (
+                <div key={i} style={{ fontSize: 12.5, color: T.text, background: `${T.blue}0d`, border: `1px solid ${T.blue}33`, borderRadius: 8, padding: "8px 10px", marginBottom: 6 }}>
+                  <strong>{st.nom}</strong>
+                  <div style={{ color: T.mute, marginTop: 2 }}>
+                    {st.dateArrivee || st.dateDepart
+                      ? <>Arrivée {st.dateArrivee || "—"} → Départ {st.dateDepart || "—"}</>
+                      : <span style={{ color: T.amber }}>Dates non renseignées</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ fontSize: 11.5, color: T.dim, lineHeight: 1.5 }}>
+            Stages : {stagiaire.stages.map(st => st.nom).join(", ")}
+            <br />Mettre à jour l'email/téléphone ici les corrige sur toutes ses inscriptions. Les dates d'hébergement se modifient depuis la fiche du stagiaire, dans l'onglet Stages.
+          </div>
+        </div>
+        <div style={styles.modalFoot}>
+          <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
+          <button style={styles.primaryBtn} onClick={() => onSave({ email: email.trim(), telephone: telephone.trim() })}><Check size={16} /> Enregistrer</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StageCard({ s, onEdit, onDelete, onParticipants }) {
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  // Compatibilité : anciens participants stockés en simple chaîne → normalisés en { nom, hebergement }
+  const [form, setForm] = useState({ nom: "", classement: "" });
+  const [editingIdx, setEditingIdx] = useState(null);
+  const setF = (k, v) => setForm({ ...form, [k]: v });
+  // Compatibilité : anciens inscrits stockés en simple chaîne, ou avec prénom/âge séparés → normalisés
   const parts = (s.participants || []).map(p => (typeof p === "string" ? { nom: p, hebergement: false } : p));
+  const displayName = (p) => (p.prenom || p.nom) ? `${p.prenom || ""} ${p.nom || ""}`.trim() : "—";
   const inscrits = parts.length;
   const avecHebergement = parts.filter(p => p.hebergement).length;
   const pct = s.places ? Math.round(inscrits / s.places * 100) : 0;
   const complet = inscrits >= (s.places || 0);
   const ca = inscrits * (s.tarif || 0) + avecHebergement * (s.hebergementTarif || 0);
   const col = STAGE_TYPE_COLOR[s.type] || T.green;
-  const add = () => { if (!name.trim()) return; onParticipants([...parts, { nom: name.trim(), hebergement: false }]); setName(""); };
+  const add = () => {
+    if (!form.nom.trim()) return;
+    onParticipants([...parts, { nom: form.nom.trim(), classement: form.classement.trim(), hebergement: false }]);
+    setForm({ nom: "", classement: "" });
+  };
   const del = (i) => onParticipants(parts.filter((_, k) => k !== i));
   const toggleHebergement = (i) => onParticipants(parts.map((p, k) => (k === i ? { ...p, hebergement: !p.hebergement } : p)));
+  const saveStagiaire = (i, data) => { onParticipants(parts.map((p, k) => (k === i ? { ...p, ...data } : p))); setEditingIdx(null); };
   const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
   return (
     <div style={styles.stageCard}>
@@ -1877,6 +2088,17 @@ function StageCard({ s, onEdit, onDelete, onParticipants }) {
       </div>
       <div style={styles.scoreTrack}><div style={{ ...styles.scoreFill, width: `${Math.min(100, pct)}%`, background: complet ? T.green : T.amber }} /></div>
 
+      {parts.length > 0 && (
+        <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {parts.map((p, i) => (
+            <span key={i} onClick={() => setEditingIdx(i)} style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 600, padding: "4px 9px", borderRadius: 20, background: T.bg2, border: `1px solid ${T.border2}` }}>
+              {displayName(p)}{p.classement ? <span style={{ color: T.dim, fontWeight: 500 }}>· {p.classement}</span> : null}
+              {p.hebergement && <Home size={11} color={T.blue} />}
+            </span>
+          ))}
+        </div>
+      )}
+
       {s.hebergement && (
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, fontSize: 11.5, fontWeight: 700, color: T.blue }}>
           <Home size={12} /> {avecHebergement}/{inscrits} avec hébergement
@@ -1894,8 +2116,10 @@ function StageCard({ s, onEdit, onDelete, onParticipants }) {
       {open && (
         <div style={styles.stageFill}>
           <div style={{ display: "flex", gap: 8 }}>
-            <input style={styles.input} placeholder="Nom du participant" value={name}
-              onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} />
+            <input style={{ ...styles.input, flex: 1.4 }} placeholder="Nom du stagiaire" value={form.nom}
+              onChange={(e) => setF("nom", e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} />
+            <input style={{ ...styles.input, flex: 1 }} placeholder="Classement (15/2…)" value={form.classement}
+              onChange={(e) => setF("classement", e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} />
             <button style={styles.primaryBtn} onClick={add}><Plus size={15} /></button>
           </div>
           {parts.length === 0 ? (
@@ -1904,8 +2128,11 @@ function StageCard({ s, onEdit, onDelete, onParticipants }) {
             <div style={{ marginTop: 8 }}>
               {parts.map((p, i) => (
                 <div key={i} style={styles.partRow}>
-                  <span style={{ fontSize: 12.5 }}>{i + 1}. {p.nom}</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ minWidth: 0, cursor: "pointer" }} onClick={() => setEditingIdx(i)}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600 }}>{i + 1}. {displayName(p)} <span style={{ fontSize: 10.5, color: T.green, fontWeight: 700 }}>· voir la fiche</span></div>
+                    {p.classement && <div style={{ fontSize: 11, color: T.dim, marginTop: 1 }}>Classement {p.classement}</div>}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                     {s.hebergement && (
                       <button
                         style={{
@@ -1929,6 +2156,83 @@ function StageCard({ s, onEdit, onDelete, onParticipants }) {
           )}
         </div>
       )}
+
+      {editingIdx != null && parts[editingIdx] && (
+        <StagiaireModal
+          stagiaire={parts[editingIdx]}
+          stageNom={s.nom}
+          proposeHebergement={!!s.hebergement}
+          onSave={(data) => saveStagiaire(editingIdx, data)}
+          onClose={() => setEditingIdx(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function StagiaireModal({ stagiaire, stageNom, proposeHebergement, onSave, onClose }) {
+  const [f, setF] = useState({
+    prenom: stagiaire.prenom || "",
+    nom: stagiaire.nom || "",
+    classement: stagiaire.classement || "",
+    age: stagiaire.age || "",
+    objectifs: stagiaire.objectifs || "",
+    hebergement: !!stagiaire.hebergement,
+    dateArrivee: stagiaire.dateArrivee || "",
+    dateDepart: stagiaire.dateDepart || "",
+    email: stagiaire.email || "",
+    telephone: stagiaire.telephone || "",
+  });
+  const set = (k, v) => setF({ ...f, [k]: v });
+  const canSave = (f.prenom.trim() || f.nom.trim());
+  const save = () => onSave({ ...f, age: f.age ? +f.age : null });
+  return (
+    <div style={styles.overlay} onClick={onClose}>
+      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHead}>
+          <div>
+            <span style={styles.modalTitle}>Fiche stagiaire</span>
+            <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{stageNom}</div>
+          </div>
+          <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div style={styles.modalBody}>
+          <div style={styles.grid2}>
+            <Field label="Prénom"><input style={styles.input} value={f.prenom} onChange={(e) => set("prenom", e.target.value)} /></Field>
+            <Field label="Nom"><input style={styles.input} value={f.nom} onChange={(e) => set("nom", e.target.value)} /></Field>
+          </div>
+          <div style={styles.grid2}>
+            <Field label="Classement"><input style={styles.input} value={f.classement} placeholder="15/2" onChange={(e) => set("classement", e.target.value)} /></Field>
+            <Field label="Âge"><input style={styles.input} type="number" value={f.age} onChange={(e) => set("age", e.target.value)} /></Field>
+          </div>
+          <Field label="Objectifs du stage" full>
+            <textarea style={{ ...styles.textarea, minHeight: 70 }} value={f.objectifs} placeholder="Ce que le stagiaire veut travailler pendant le stage…" onChange={(e) => set("objectifs", e.target.value)} />
+          </Field>
+          <div style={styles.grid2}>
+            <Field label="Email"><input style={styles.input} type="email" value={f.email} placeholder="parent@email.fr" onChange={(e) => set("email", e.target.value)} /></Field>
+            <Field label="Téléphone"><input style={styles.input} value={f.telephone} placeholder="06 12 34 56 78" onChange={(e) => set("telephone", e.target.value)} /></Field>
+          </div>
+          {proposeHebergement && (
+            <>
+              <Field label="Hébergement" full>
+                <button style={{ ...styles.toggle, ...(f.hebergement ? styles.toggleOn : {}) }} onClick={() => set("hebergement", !f.hebergement)}>
+                  {f.hebergement ? "✓ Hébergement pris" : "Pas d'hébergement"}
+                </button>
+              </Field>
+              {f.hebergement && (
+                <div style={styles.grid2}>
+                  <Field label="Date d'arrivée"><input style={styles.input} value={f.dateArrivee} placeholder="20/10/2026" onChange={(e) => set("dateArrivee", e.target.value)} /></Field>
+                  <Field label="Date de départ"><input style={styles.input} value={f.dateDepart} placeholder="24/10/2026" onChange={(e) => set("dateDepart", e.target.value)} /></Field>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        <div style={styles.modalFoot}>
+          <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
+          <button style={{ ...styles.primaryBtn, opacity: canSave ? 1 : 0.5, cursor: canSave ? "pointer" : "not-allowed" }} onClick={() => canSave && save()}><Check size={16} /> Enregistrer</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2020,8 +2324,9 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
   const enProgression = players.filter(p => (p.detail && p.detail.indiceDelta > 0) || p.serviceTrend >= 8).length;
   const vitrine = [...players].sort((a, b) => (b.serviceTrend || 0) - (a.serviceTrend || 0)).filter(p => (p.serviceTrend || 0) > 0).slice(0, 3);
 
-  // Santé business — chiffres réels de Juin 2026 (tarifs joueurs + dépenses/prestations + revenus stages)
-  const MOIS_BUSINESS = "Juin 2026";
+  // Santé business — chiffres réels du dernier mois renseigné dans l'onglet Dépenses
+  const moisDisponibles = [...new Set((depenses || []).map(d => d.mois).filter(Boolean))].sort((a, b) => moisSortKey(a) - moisSortKey(b));
+  const MOIS_BUSINESS = moisDisponibles[moisDisponibles.length - 1] || moisLabelNow();
   const revenuJoueurs = players.reduce((a, p) => a + (p.tarifMensuel || 0), 0);
   const playersSansTarif = players.filter(p => !p.tarifMensuel || p.tarifMensuel <= 0).length;
   const revenuStages = caStagesMois(stages, MOIS_BUSINESS);
@@ -2242,6 +2547,7 @@ function Sidebar({ active = "dashboard", onNavigate, onLogout, adminEmail }) {
     { key: "planning", icon: CalendarDays, label: "Planning", nav: true },
     { key: "joueurs", icon: UserRound, label: "Joueurs", nav: true },
     { key: "stages", icon: Tent, label: "Stages", nav: true },
+    { key: "stagiaires", icon: UserPlus, label: "Stagiaires", nav: true },
     { key: "depenses", icon: Wallet, label: "Dépenses", nav: true },
     { key: "ia", icon: Sparkles, label: "Assistant IA", nav: true },
     { key: "tests", icon: FlaskRound, label: "Tests & analyses", soon: true },
