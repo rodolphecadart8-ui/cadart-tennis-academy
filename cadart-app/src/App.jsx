@@ -2108,7 +2108,7 @@ function agregerStagiaires(stages) {
       if (!entry.email && p.email) entry.email = p.email;
       if (!entry.telephone && p.telephone) entry.telephone = p.telephone;
       const montant = (s.tarif || 0) + (p.hebergement ? (s.hebergementTarif || 0) : 0);
-      entry.stages.push({ nom: s.nom, du: s.du, au: s.au, type: s.type, hebergement: !!p.hebergement, dateArrivee: p.dateArrivee || "", dateDepart: p.dateDepart || "", montant, paye: !!p.paye });
+      entry.stages.push({ nom: s.nom, du: s.du, au: s.au, type: s.type, hebergement: !!p.hebergement, dateArrivee: p.dateArrivee || "", dateDepart: p.dateDepart || "", montant, paye: !!p.paye, compteRendu: p.compteRendu || "" });
     });
   });
   const result = [...map.values()];
@@ -2327,6 +2327,16 @@ function StagiaireContactModal({ stagiaire, onSave, onDelete, onClose }) {
                     <> · Hôtel : arrivée {st.dateArrivee || "—"}, départ {st.dateDepart || "—"}</>
                   )}
                 </div>
+                {st.compteRendu && (
+                  <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${T.border2}` }}>
+                    <a
+                      href={`mailto:${stagiaire.email || ""}?subject=${encodeURIComponent("Compte rendu de stage — " + stagiaire.nomComplet)}&body=${encodeURIComponent(st.compteRendu)}`}
+                      style={{ fontSize: 11, fontWeight: 700, color: T.green, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}
+                    >
+                      <Send size={11} /> Envoyer le compte rendu de ce stage
+                    </a>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -2510,12 +2520,50 @@ function StagiaireModal({ stagiaire, stageNom, tarifStage, hebergementTarif, pro
     email: stagiaire.email || "",
     telephone: stagiaire.telephone || "",
     paye: !!stagiaire.paye,
+    entrainementRealise: stagiaire.entrainementRealise || "",
+    objectifsTravail: stagiaire.objectifsTravail || "",
+    commentaireMental: stagiaire.commentaireMental || "",
+    attitude: stagiaire.attitude || "",
+    compteRendu: stagiaire.compteRendu || "",
   });
   const set = (k, v) => setF({ ...f, [k]: v });
   const canSave = (f.prenom.trim() || f.nom.trim());
   const save = () => onSave({ ...f, age: f.age ? +f.age : null });
   const montantDu = (tarifStage || 0) + (f.hebergement ? (hebergementTarif || 0) : 0);
   const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
+
+  const [genLoading, setGenLoading] = useState(false);
+  const [genError, setGenError] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const nomComplet = `${f.prenom} ${f.nom}`.trim() || "le stagiaire";
+  const notesRemplies = f.entrainementRealise.trim() || f.objectifsTravail.trim() || f.commentaireMental.trim() || f.attitude.trim();
+
+  const genererCompteRendu = async () => {
+    setGenLoading(true); setGenError(null);
+    try {
+      const prompt = `Tu es un coach de tennis à CADART Tennis Academy. Rédige un compte rendu de stage court (10 à 15 lignes), chaleureux et professionnel, à destination des parents de ${nomComplet}, à la suite du stage "${stageNom}".
+
+Notes du coach à intégrer (ne rien inventer au-delà) :
+- Entraînement réalisé : ${f.entrainementRealise || "non précisé"}
+- Objectifs de travail : ${f.objectifsTravail || "non précisé"}
+- Commentaire mental : ${f.commentaireMental || "non précisé"}
+- Attitude : ${f.attitude || "non précisé"}
+
+Écris à la première personne du pluriel ("nous"), reste positif et constructif même pour les points à travailler, donne une vision claire de la progression, et termine par une formule de politesse signée « L'équipe CADART Tennis Academy ». Réponds uniquement avec le texte du compte rendu, sans titre ni introduction.`;
+      const text = await callClaudeAPI(prompt);
+      set("compteRendu", text.trim());
+    } catch (e) {
+      console.error("Génération compte rendu impossible :", e);
+      setGenError("Génération impossible pour le moment. Réessaie dans un instant.");
+    } finally {
+      setGenLoading(false);
+    }
+  };
+  const copierCompteRendu = () => {
+    try { navigator.clipboard.writeText(f.compteRendu); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch (e) { /* clipboard indispo */ }
+  };
+  const mailtoHref = `mailto:${f.email || ""}?subject=${encodeURIComponent("Compte rendu de stage — " + nomComplet)}&body=${encodeURIComponent(f.compteRendu)}`;
+
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -2566,6 +2614,43 @@ function StagiaireModal({ stagiaire, stageNom, tarifStage, hebergementTarif, pro
               {f.paye ? "✓ Payé" : "Non payé"}
             </button>
           </Field>
+
+          <div style={{ borderTop: `1px dashed ${T.border2}`, marginTop: 6, paddingTop: 16 }}>
+            <div style={styles.objHeader}>Bilan du coach (à remplir en fin de stage)</div>
+            <Field label="1. Entraînement réalisé" full>
+              <textarea style={{ ...styles.textarea, minHeight: 55 }} value={f.entrainementRealise} placeholder="Ce qui a été travaillé sur le court…" onChange={(e) => set("entrainementRealise", e.target.value)} />
+            </Field>
+            <Field label="2. Objectifs de travail" full>
+              <textarea style={{ ...styles.textarea, minHeight: 55 }} value={f.objectifsTravail} placeholder="Les axes de progrès identifiés pour la suite…" onChange={(e) => set("objectifsTravail", e.target.value)} />
+            </Field>
+            <Field label="3. Commentaire mental" full>
+              <textarea style={{ ...styles.textarea, minHeight: 55 }} value={f.commentaireMental} placeholder="Concentration, gestion de la pression, confiance…" onChange={(e) => set("commentaireMental", e.target.value)} />
+            </Field>
+            <Field label="4. Attitude" full>
+              <textarea style={{ ...styles.textarea, minHeight: 55 }} value={f.attitude} placeholder="Comportement, esprit d'équipe, sérieux…" onChange={(e) => set("attitude", e.target.value)} />
+            </Field>
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4, marginBottom: 8 }}>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: T.text }}>Compte rendu pour les parents</span>
+              <button style={styles.smallBtn} onClick={genererCompteRendu} disabled={genLoading || !notesRemplies} title={!notesRemplies ? "Remplis au moins une note ci-dessus" : ""}>
+                <Sparkles size={13} /> {genLoading ? "Génération…" : "Générer avec l'IA"}
+              </button>
+            </div>
+            {genError && <div style={{ color: T.red, fontSize: 11.5, marginBottom: 8 }}>{genError}</div>}
+            <textarea
+              style={{ ...styles.textarea, minHeight: 130 }}
+              value={f.compteRendu}
+              placeholder="Le compte rendu généré apparaîtra ici — tu peux aussi l'écrire ou le corriger toi-même."
+              onChange={(e) => set("compteRendu", e.target.value)}
+            />
+            {f.compteRendu && (
+              <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                <a href={mailtoHref} style={{ ...styles.smallBtn, textDecoration: "none" }}><Send size={13} /> Envoyer aux parents</a>
+                <button style={styles.smallBtn} onClick={copierCompteRendu}>{copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "Copié" : "Copier"}</button>
+                {!f.email && <span style={{ fontSize: 11, color: T.amber, alignSelf: "center" }}>⚠️ Pas d'email renseigné pour l'envoi direct</span>}
+              </div>
+            )}
+          </div>
         </div>
         <div style={styles.modalFoot}>
           <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
