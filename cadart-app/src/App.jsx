@@ -95,7 +95,8 @@ function caStagesMois(stages, moisLabel) {
   }, 0);
 }
 /* Extrait, à partir des dépenses, les prestations coachs du mois le plus récent renseigné
-   (utilisé pour le "Rendement par coach" du tableau de bord et l'Assistant IA). */
+   (utilisé pour le "Rendement par coach" du tableau de bord et l'Assistant IA).
+   Les montants sont stockés en négatif (dépense) — on prend la valeur absolue = coût réel. */
 function dernieresPrestationsCoachs(depenses) {
   const list = depenses || [];
   const moisDisponibles = [...new Set(list.map(d => d.mois).filter(Boolean))].sort((a, b) => moisSortKey(a) - moisSortKey(b));
@@ -103,7 +104,7 @@ function dernieresPrestationsCoachs(depenses) {
   if (!dernierMois) return {};
   const map = {};
   list.filter(d => d.mois === dernierMois && d.categorie === "Prestations coachs").forEach(d => {
-    map[d.libelle] = (map[d.libelle] || 0) + (d.montant || 0);
+    map[d.libelle] = (map[d.libelle] || 0) + Math.abs(d.montant || 0);
   });
   return map;
 }
@@ -529,6 +530,7 @@ STAGES_SEED.push(...genStagesRecurrents());
 
 /* ---------- Dépenses de l'académie (organisées mois par mois) ---------- */
 const DEPENSES_KEY = "cadart:depenses:v3";
+const DEPENSES_MIGRATION_KEY = "cadart:depenses:migrated_signes_v1";
 async function loadDepenses() {
   try { const r = await window.storage.get(DEPENSES_KEY); if (r && r.value) return JSON.parse(r.value); }
   catch (e) { /* clé absente */ }
@@ -538,34 +540,188 @@ async function saveDepenses(d) {
   try { await window.storage.set(DEPENSES_KEY, JSON.stringify(d)); }
   catch (e) { console.error("Sauvegarde dépenses impossible :", e); }
 }
-const DEPENSES_CATEGORIES = ["Prestations coachs", "Location courts / salle", "Hébergement stages", "Assurance", "Charges sociales (URSSAF)", "Impôts et taxes", "Matériel", "Marketing / communication", "Comptabilité / gestion", "Frais bancaires", "Remboursements frais", "Électricité / eau", "Entretien", "Administratif", "Autre"];
+const DEPENSES_CATEGORIES = [
+  "Prestations coachs", "Cotisations familles / adhérents", "Sponsoring", "Aide apprentissage (État)",
+  "Location courts / salle", "Hébergement stages", "Loyer Xavier Louis", "Assurance",
+  "Charges sociales (URSSAF)", "Impôts et taxes", "Comptabilité / gestion", "Frais bancaires",
+  "Remboursements frais", "Avances / remboursements Cadart", "Adhésions fédérales",
+  "Abonnements (site/paiement en ligne)", "Logiciel de gestion (Jazz)", "Prévoyance santé",
+  "Retraite (AG2R)", "Prestataires divers", "Ligue de Provence (licences / tickets)",
+  "Matériel", "Marketing / communication", "Électricité / eau", "Entretien", "Administratif", "Autre",
+];
 /* Dépenses réelles extraites du relevé bancaire de juin 2026 — à compléter mois par mois.
    Les prestations de chaque coach sont des dépenses comme les autres (catégorie "Prestations coachs"),
    ce qui permet de les faire varier chaque mois exactement comme le reste. */
+/* Données réelles importées du tableau de bord financier (TMA_Dashboard.xlsx) —
+   janvier à juin 2026. Montants signés : positif = recette, négatif = dépense,
+   exactement comme dans le relevé bancaire d'origine. */
 const DEPENSES_SEED = [
-  { id: "d1", mois: "Juin 2026", categorie: "Location courts / salle", libelle: "Loyer académie (Country Club Aixois)", montant: 3592 },
-  { id: "d2", mois: "Juin 2026", categorie: "Assurance", libelle: "Assurance RC Pro (GAN)", montant: 70 },
-  { id: "d3", mois: "Juin 2026", categorie: "Charges sociales (URSSAF)", libelle: "URSSAF PACA", montant: 1142 },
-  { id: "d4", mois: "Juin 2026", categorie: "Impôts et taxes", libelle: "DGFIP", montant: 92 },
-  { id: "d5", mois: "Juin 2026", categorie: "Comptabilité / gestion", libelle: "Comptable (Exaudis)", montant: 258 },
-  { id: "d6", mois: "Juin 2026", categorie: "Administratif", libelle: "Cotisation association", montant: 13 },
-  { id: "d7", mois: "Juin 2026", categorie: "Frais bancaires", libelle: "Frais d'encaissement carte bancaire", montant: 19 },
-  { id: "d8", mois: "Juin 2026", categorie: "Hébergement stages", libelle: "Logis des Clercs (stage juin)", montant: 7234 },
-  { id: "d9", mois: "Juin 2026", categorie: "Location courts / salle", libelle: "Location terrain (Ligue de Provence)", montant: 334 },
-  { id: "d10", mois: "Juin 2026", categorie: "Remboursements frais", libelle: "Indemnités kilométriques + repas (coachs)", montant: 895 },
-  { id: "co1", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: 7362 },
-  { id: "co2", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: 4750 },
-  { id: "co3", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: 2700 },
-  { id: "co4", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: 2693 },
-  { id: "co5", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Remy Romain", montant: 2750 },
-  { id: "co6", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: 2550 },
-  { id: "co7", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: 1727 },
-  { id: "co8", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: 1834 },
-  { id: "co9", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Cadart Tom", montant: 1500 },
-  { id: "co10", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: 1308 },
-  { id: "co11", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: 950 },
-  { id: "co12", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: 927 },
-  { id: "co13", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: 250 },
+  { id: "imp1", mois: "Avril 2026", categorie: "Abonnements (site/paiement en ligne)", libelle: "Abonnements (site/paiement en ligne)", montant: -139.2 },
+  { id: "imp2", mois: "Mai 2026", categorie: "Abonnements (site/paiement en ligne)", libelle: "Abonnements (site/paiement en ligne)", montant: -19.2 },
+  { id: "imp3", mois: "Juin 2026", categorie: "Abonnements (site/paiement en ligne)", libelle: "Abonnements (site/paiement en ligne)", montant: -19.2 },
+  { id: "imp4", mois: "Février 2026", categorie: "Adhésions fédérales", libelle: "Adhésions fédérales", montant: -90 },
+  { id: "imp5", mois: "Janvier 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 2083.3 },
+  { id: "imp6", mois: "Février 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 833.32 },
+  { id: "imp7", mois: "Mars 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 416.66 },
+  { id: "imp8", mois: "Avril 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 416.66 },
+  { id: "imp9", mois: "Mai 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 416.66 },
+  { id: "imp10", mois: "Juin 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 416.66 },
+  { id: "imp11", mois: "Janvier 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
+  { id: "imp12", mois: "Février 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
+  { id: "imp13", mois: "Mars 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
+  { id: "imp14", mois: "Avril 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
+  { id: "imp15", mois: "Mai 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
+  { id: "imp16", mois: "Juin 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
+  { id: "imp17", mois: "Janvier 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: -2700 },
+  { id: "imp18", mois: "Février 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: -2683.61 },
+  { id: "imp19", mois: "Mars 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: 100 },
+  { id: "imp20", mois: "Avril 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: 3268.2 },
+  { id: "imp21", mois: "Mai 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: 5622 },
+  { id: "imp22", mois: "Juin 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: 650 },
+  { id: "imp23", mois: "Janvier 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -565 },
+  { id: "imp24", mois: "Février 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -926 },
+  { id: "imp25", mois: "Mars 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -1142 },
+  { id: "imp26", mois: "Avril 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -1142 },
+  { id: "imp27", mois: "Mai 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -1142 },
+  { id: "imp28", mois: "Juin 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -1142 },
+  { id: "imp29", mois: "Janvier 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 31196.7 },
+  { id: "imp30", mois: "Février 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 30645.5 },
+  { id: "imp31", mois: "Mars 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 33327.5 },
+  { id: "imp32", mois: "Avril 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 33139.73 },
+  { id: "imp33", mois: "Mai 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 23278.22 },
+  { id: "imp34", mois: "Juin 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 26316.64 },
+  { id: "imp35", mois: "Janvier 2026", categorie: "Frais bancaires", libelle: "Frais bancaires", montant: 5.25 },
+  { id: "imp36", mois: "Février 2026", categorie: "Frais bancaires", libelle: "Frais bancaires", montant: -1.57 },
+  { id: "imp37", mois: "Mars 2026", categorie: "Frais bancaires", libelle: "Frais bancaires", montant: -55.25 },
+  { id: "imp38", mois: "Mai 2026", categorie: "Frais bancaires", libelle: "Frais bancaires", montant: -19 },
+  { id: "imp39", mois: "Janvier 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -600.08 },
+  { id: "imp40", mois: "Février 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -312 },
+  { id: "imp41", mois: "Mars 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -258 },
+  { id: "imp42", mois: "Avril 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -258 },
+  { id: "imp43", mois: "Mai 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -258 },
+  { id: "imp44", mois: "Juin 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -258 },
+  { id: "imp45", mois: "Avril 2026", categorie: "Impôts (DGFIP)", libelle: "Impôts (DGFIP)", montant: -92 },
+  { id: "imp46", mois: "Mai 2026", categorie: "Impôts (DGFIP)", libelle: "Impôts (DGFIP)", montant: -92 },
+  { id: "imp47", mois: "Juin 2026", categorie: "Impôts (DGFIP)", libelle: "Impôts (DGFIP)", montant: -92 },
+  { id: "imp48", mois: "Février 2026", categorie: "Ligue de Provence (licences / tickets)", libelle: "Ligue de Provence (licences / tickets)", montant: -1335 },
+  { id: "imp49", mois: "Juin 2026", categorie: "Ligue de Provence (licences / tickets)", libelle: "Ligue de Provence (licences / tickets)", montant: -334 },
+  { id: "imp50", mois: "Mars 2026", categorie: "Location terrains (Country Club Aixois)", libelle: "Location terrains (Country Club Aixois)", montant: -3988 },
+  { id: "imp51", mois: "Mai 2026", categorie: "Location terrains (Country Club Aixois)", libelle: "Location terrains (Country Club Aixois)", montant: -6692 },
+  { id: "imp52", mois: "Juin 2026", categorie: "Location terrains (Country Club Aixois)", libelle: "Location terrains (Country Club Aixois)", montant: -3592 },
+  { id: "imp53", mois: "Janvier 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
+  { id: "imp54", mois: "Février 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
+  { id: "imp55", mois: "Mars 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
+  { id: "imp56", mois: "Avril 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
+  { id: "imp57", mois: "Mai 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
+  { id: "imp58", mois: "Juin 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
+  { id: "imp59", mois: "Janvier 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -800 },
+  { id: "imp60", mois: "Février 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -4600 },
+  { id: "imp61", mois: "Mars 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -2200 },
+  { id: "imp62", mois: "Mai 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -1000 },
+  { id: "imp63", mois: "Juin 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -1000 },
+  { id: "imp64", mois: "Janvier 2026", categorie: "Prestataires divers", libelle: "Prestataires divers", montant: -700 },
+  { id: "imp65", mois: "Janvier 2026", categorie: "Prévoyance santé", libelle: "Prévoyance santé", montant: -168.94 },
+  { id: "imp66", mois: "Janvier 2026", categorie: "Retraite (AG2R)", libelle: "Retraite (AG2R)", montant: -359.55 },
+  { id: "imp67", mois: "Avril 2026", categorie: "Retraite (AG2R)", libelle: "Retraite (AG2R)", montant: -654.18 },
+  { id: "imp68", mois: "Janvier 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 2550 },
+  { id: "imp69", mois: "Février 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 11450 },
+  { id: "imp70", mois: "Mars 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 1200 },
+  { id: "imp71", mois: "Avril 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 1450 },
+  { id: "imp72", mois: "Mai 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 950 },
+  { id: "imp73", mois: "Juin 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 21450 },
+  { id: "imp74", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Alona svetova", montant: -300 },
+  { id: "imp75", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Antoine Pages", montant: -2000 },
+  { id: "imp76", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Arnaud Ardilly", montant: -472 },
+  { id: "imp77", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Christophe ficot", montant: -219 },
+  { id: "imp78", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -2185 },
+  { id: "imp79", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -1830.7 },
+  { id: "imp80", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -2112.5 },
+  { id: "imp81", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -2200 },
+  { id: "imp82", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -927.15 },
+  { id: "imp83", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -2000 },
+  { id: "imp84", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -4750 },
+  { id: "imp85", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -2500 },
+  { id: "imp86", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -3650 },
+  { id: "imp87", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -4750 },
+  { id: "imp88", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: -2500 },
+  { id: "imp89", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: -3550 },
+  { id: "imp90", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: -3000 },
+  { id: "imp91", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: -7362 },
+  { id: "imp92", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Gabin revolar", montant: -355.32 },
+  { id: "imp93", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Giovann pisella", montant: -550 },
+  { id: "imp94", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -2807.55 },
+  { id: "imp95", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -1500 },
+  { id: "imp96", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -2807.55 },
+  { id: "imp97", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -2807.55 },
+  { id: "imp98", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -2811 },
+  { id: "imp99", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -1307.55 },
+  { id: "imp100", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -3900 },
+  { id: "imp101", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -328 },
+  { id: "imp102", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -2982.6 },
+  { id: "imp103", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -2600 },
+  { id: "imp104", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -3482.65 },
+  { id: "imp105", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -1834 },
+  { id: "imp106", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -1145.86 },
+  { id: "imp107", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -1411.28 },
+  { id: "imp108", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -1500 },
+  { id: "imp109", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -2669.28 },
+  { id: "imp110", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -2300 },
+  { id: "imp111", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -1726.84 },
+  { id: "imp112", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Kim tabeau", montant: -1292.93 },
+  { id: "imp113", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Kim tabeau", montant: -1832.12 },
+  { id: "imp114", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -3000 },
+  { id: "imp115", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -2467.5 },
+  { id: "imp116", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -1472.5 },
+  { id: "imp117", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -2943 },
+  { id: "imp118", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -1300 },
+  { id: "imp119", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -2693 },
+  { id: "imp120", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Le chop Bruno", montant: -3300 },
+  { id: "imp121", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Le chop Bruno", montant: -1400 },
+  { id: "imp122", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Le chop Bruno", montant: -1766.6 },
+  { id: "imp123", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Lucas", montant: -100 },
+  { id: "imp124", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Lucas desgranges", montant: -289.5 },
+  { id: "imp125", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Marc Verpeaux", montant: -410 },
+  { id: "imp126", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Matheo Vivier", montant: -2249.28 },
+  { id: "imp127", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Matheo Vivier", montant: -150 },
+  { id: "imp128", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -1877.78 },
+  { id: "imp129", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -949.78 },
+  { id: "imp130", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -949.78 },
+  { id: "imp131", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -949.79 },
+  { id: "imp132", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -949.78 },
+  { id: "imp133", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2000 },
+  { id: "imp134", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2000 },
+  { id: "imp135", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2000 },
+  { id: "imp136", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -3012 },
+  { id: "imp137", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2200 },
+  { id: "imp138", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2550 },
+  { id: "imp139", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2500 },
+  { id: "imp140", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2700 },
+  { id: "imp141", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2700 },
+  { id: "imp142", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2900 },
+  { id: "imp143", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2700 },
+  { id: "imp144", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2700 },
+  { id: "imp145", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -2500 },
+  { id: "imp146", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -1800 },
+  { id: "imp147", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -900 },
+  { id: "imp148", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -800 },
+  { id: "imp149", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -250 },
+  { id: "imp150", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Pablo Besse", montant: -65 },
+  { id: "imp151", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Pablo Besse", montant: -350 },
+  { id: "imp152", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Pablo Besse", montant: -250 },
+  { id: "imp153", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Poulet Tom", montant: -500 },
+  { id: "imp154", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Remy romain", montant: -3500 },
+  { id: "imp155", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Remy romain", montant: -4258 },
+  { id: "imp156", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Remy romain", montant: -2750 },
+  { id: "imp157", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Say sophanuth", montant: -750 },
+  { id: "imp158", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Sohel boucourt", montant: -425 },
+  { id: "imp159", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Stephane giop", montant: -425.25 },
+  { id: "imp160", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Stephane giop", montant: -472.5 },
+  { id: "imp161", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1500 },
+  { id: "imp162", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1000 },
+  { id: "imp163", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1500 },
+  { id: "imp164", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -2300 },
+  { id: "imp165", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -700 },
+  { id: "imp166", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1500 },
 ];
 
 /* ---------- Le cerveau : analyse d'un joueur ---------- */
@@ -936,7 +1092,20 @@ function CoachDashboard({ onLogout, adminEmail }) {
       else setStages(st);
       const dp = await loadDepenses();
       if (dp === null) { setDepenses(DEPENSES_SEED); saveDepenses(DEPENSES_SEED); }
-      else setDepenses(dp);
+      else {
+        // Migration ponctuelle : avant ce changement, tous les montants étaient toujours positifs
+        // (= une dépense). Si ce n'est pas encore fait, on les repasse en négatif une seule fois,
+        // pour que les données déjà en ligne restent correctement interprétées comme des dépenses.
+        const migre = await window.storage.get(DEPENSES_MIGRATION_KEY).catch(() => null);
+        if (!migre) {
+          const migres = dp.map(d => ({ ...d, montant: -Math.abs(d.montant || 0) }));
+          setDepenses(migres);
+          saveDepenses(migres);
+          window.storage.set(DEPENSES_MIGRATION_KEY, "true").catch(() => {});
+        } else {
+          setDepenses(dp);
+        }
+      }
       setLoading(false);
     })();
   }, []);
@@ -1413,24 +1582,25 @@ function buildAcademySummary(players, stages, depenses) {
   const parType = {};
   list.forEach(s => { parType[s.type] = (parType[s.type] || 0) + 1; });
 
-  // Dépenses réelles et marge — sur le dernier mois renseigné
+  // Dépenses réelles et marge — sur le dernier mois renseigné (montants signés : + recette, − dépense)
   const dList = depenses || [];
   const moisDisponibles = [...new Set(dList.map(d => d.mois).filter(Boolean))].sort((a, b) => moisSortKey(a) - moisSortKey(b));
   const dernierMois = moisDisponibles[moisDisponibles.length - 1];
-  const depensesDuMois = dList.filter(d => d.mois === dernierMois);
-  const depensesMensuelles = depensesDuMois.filter(d => d.categorie !== "Prestations coachs").reduce((a, d) => a + (d.montant || 0), 0);
+  const depensesDuMois = dList.filter(d => d.mois === dernierMois && d.categorie !== "Prestations coachs");
+  const autresRecettesDuMois = depensesDuMois.filter(d => (d.montant || 0) > 0).reduce((a, d) => a + d.montant, 0);
+  const depensesMensuelles = depensesDuMois.filter(d => (d.montant || 0) < 0).reduce((a, d) => a + d.montant, 0); // négatif
   const depensesParCategorie = {};
-  depensesDuMois.filter(d => d.categorie !== "Prestations coachs").forEach(d => { depensesParCategorie[d.categorie] = (depensesParCategorie[d.categorie] || 0) + d.montant; });
-  const totalSalairesCoachs = Object.values(prestationsCoachs).reduce((a, v) => a + v, 0);
+  depensesDuMois.forEach(d => { depensesParCategorie[d.categorie] = (depensesParCategorie[d.categorie] || 0) + d.montant; });
+  const totalSalairesCoachs = Object.values(prestationsCoachs).reduce((a, v) => a + v, 0); // positif (coût)
   const revenuJoueursMensuel = players.reduce((a, p) => a + (p.tarifMensuel || 0), 0);
   const revenuStagesDuMois = dernierMois ? caStagesMois(list, dernierMois) : 0;
-  const margeMensuelleEstimee = revenuJoueursMensuel + revenuStagesDuMois - totalSalairesCoachs - depensesMensuelles;
+  const margeMensuelleEstimee = revenuJoueursMensuel + revenuStagesDuMois + autresRecettesDuMois + depensesMensuelles - totalSalairesCoachs;
 
   return {
     joueursActifs, indiceMoyen, enRisque, enProgression, coachRendement,
     stagesCount: list.length, remplissageStages, caStages, revenuStagesDuMois, repartitionParType: parType,
     moisAnalyse: dernierMois || null,
-    revenuJoueursMensuel, totalSalairesCoachs, depensesMensuelles, depensesParCategorie, margeMensuelleEstimee,
+    revenuJoueursMensuel, totalSalairesCoachs, autresRecettesDuMois, depensesMensuelles, depensesParCategorie, margeMensuelleEstimee,
   };
 }
 
@@ -1537,6 +1707,8 @@ function AIAssistantView({ players, stages, depenses }) {
 function DepensesView({ depenses, onSave, players, stages }) {
   const list = depenses || [];
   const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
+  // Montant signé : positif = recette, négatif = dépense (comme dans un relevé bancaire)
+  const eurSigne = (n) => `${n >= 0 ? "+" : "-"}€${Math.abs(Math.round(n)).toLocaleString("fr-FR")}`;
 
   const mois = useMemo(() => {
     const uniq = [...new Set(list.map(d => d.mois).filter(Boolean))];
@@ -1554,6 +1726,8 @@ function DepensesView({ depenses, onSave, players, stages }) {
   const [modal, setModal] = useState(null);
   const [showRecettes, setShowRecettes] = useState(false);
   const [showStages, setShowStages] = useState(false);
+  const fileInputRef = useRef(null);
+  const [importMsg, setImportMsg] = useState(null);
   const upsert = (d) => {
     const ex = list.some(x => x.id === d.id);
     onSave(ex ? list.map(x => (x.id === d.id ? d : x)) : [...list, d]);
@@ -1561,17 +1735,52 @@ function DepensesView({ depenses, onSave, players, stages }) {
   };
   const remove = (id) => onSave(list.filter(x => x.id !== id));
 
+  const handleImportCSV = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        const rows = results.data.filter(r => r.mois && r.categorie && r.montant);
+        const imported = rows.map((r, i) => ({
+          id: "imp" + Date.now() + "-" + i,
+          mois: r.mois.trim(),
+          categorie: r.categorie.trim(),
+          libelle: (r.libelle || r.categorie).trim(),
+          montant: parseFloat(String(r.montant).replace(",", ".")) || 0,
+        }));
+        onSave([...list, ...imported]);
+        setImportMsg(`${imported.length} ligne${imported.length > 1 ? "s" : ""} importée${imported.length > 1 ? "s" : ""}.`);
+        setTimeout(() => setImportMsg(null), 4000);
+      },
+      error: () => setImportMsg("Erreur lors de la lecture du fichier CSV."),
+    });
+    e.target.value = "";
+  };
+  const downloadCSVTemplate = () => {
+    const header = "mois,categorie,libelle,montant\n";
+    const example = "Juillet 2026,Cotisations familles / adhérents,Cotisations familles / adhérents,28500\nJuillet 2026,Assurance,Assurance RC Pro (GAN),-69.92\n";
+    const blob = new Blob([header + example], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "modele_import_depenses.csv";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  };
+
   const filtered = list.filter(d => d.mois === activeMois);
   const prestations = filtered.filter(d => d.categorie === "Prestations coachs");
   const autres = filtered.filter(d => d.categorie !== "Prestations coachs");
-  const totalPrestations = prestations.reduce((a, d) => a + (d.montant || 0), 0);
-  const totalAutres = autres.reduce((a, d) => a + (d.montant || 0), 0);
+  const totalPrestations = prestations.reduce((a, d) => a + (d.montant || 0), 0); // négatif
+  const autresRecettes = autres.filter(d => (d.montant || 0) > 0).reduce((a, d) => a + d.montant, 0);
+  const autresDepenses = autres.filter(d => (d.montant || 0) < 0).reduce((a, d) => a + d.montant, 0); // négatif
   const allPlayers = players || [];
   const playersSansTarif = allPlayers.filter(p => !p.tarifMensuel || p.tarifMensuel <= 0);
   const revenuJoueurs = allPlayers.reduce((a, p) => a + (p.tarifMensuel || 0), 0);
   const stagesMois = stagesDuMois(stages, activeMois);
   const revenuStages = caStagesMois(stages, activeMois);
-  const marge = revenuJoueurs + revenuStages - totalPrestations - totalAutres;
+  const marge = revenuJoueurs + revenuStages + totalPrestations + autresRecettes + autresDepenses;
 
   const confirmNewMois = () => {
     const label = newMoisLabel.trim();
@@ -1588,12 +1797,25 @@ function DepensesView({ depenses, onSave, players, stages }) {
           <div style={styles.sub}>Vue mois par mois de la rentabilité</div>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button style={styles.ghostBtn} onClick={downloadCSVTemplate} title="Télécharger un modèle CSV">
+            <FileDown size={15} /> Modèle CSV
+          </button>
+          <input ref={fileInputRef} type="file" accept=".csv" style={{ display: "none" }} onChange={handleImportCSV} />
+          <button style={styles.ghostBtn} onClick={() => fileInputRef.current && fileInputRef.current.click()} title="Importer un tableau de bord financier (CSV)">
+            <UserPlus size={15} /> Importer CSV
+          </button>
           <button style={styles.ghostBtn} onClick={() => generateBilanAnnuelPdf(list, stages, allPlayers)} title="Générer un bilan pour le comptable">
             <FileDown size={15} /> Bilan annuel (PDF)
           </button>
           <button style={styles.primaryBtn} onClick={() => setModal("new")}><Plus size={16} /> Nouvelle dépense</button>
         </div>
       </header>
+
+      {importMsg && (
+        <div style={{ background: `${T.green}14`, border: `1px solid ${T.green}44`, color: T.green, borderRadius: 10, padding: "10px 14px", fontSize: 13, fontWeight: 600, marginBottom: 16 }}>
+          {importMsg}
+        </div>
+      )}
 
       {/* Sélecteur de mois */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 22 }}>
@@ -1634,8 +1856,9 @@ function DepensesView({ depenses, onSave, players, stages }) {
           icon={Tent} label={`Revenus stages · ${activeMois}`} value={eur(revenuStages)} onClick={() => setShowStages(true)}
           sub={`${stagesMois.length} stage${stagesMois.length > 1 ? "s" : ""} · voir détail`} subColor={T.mute}
         />
-        <Stat icon={Wallet} label={`Prestations coachs · ${activeMois}`} value={eur(totalPrestations)} sub={`${prestations.length} coach${prestations.length > 1 ? "s" : ""}`} subColor={T.mute} />
-        <Stat icon={Percent} label={`Autres dépenses · ${activeMois}`} value={eur(totalAutres)} sub={`${autres.length} poste${autres.length > 1 ? "s" : ""}`} subColor={T.mute} />
+        <Stat icon={TrendingUp} label={`Autres recettes · ${activeMois}`} value={eur(autresRecettes)} sub="cotisations, sponsoring, aides…" subColor={T.mute} />
+        <Stat icon={Wallet} label={`Prestations coachs · ${activeMois}`} value={eurSigne(totalPrestations)} sub={`${prestations.length} coach${prestations.length > 1 ? "s" : ""}`} subColor={T.red} tint={T.red} />
+        <Stat icon={Percent} label={`Autres dépenses · ${activeMois}`} value={eurSigne(autresDepenses)} sub={`${autres.filter(d => d.montant < 0).length} poste${autres.filter(d => d.montant < 0).length > 1 ? "s" : ""}`} subColor={T.red} tint={T.red} />
         <Stat icon={TrendingUp} label="Marge estimée" value={eur(marge)} sub={marge >= 0 ? "positive" : "négative"} subColor={marge >= 0 ? T.green : T.red} tint={marge >= 0 ? T.green : T.red} />
       </div>
 
@@ -1649,24 +1872,24 @@ function DepensesView({ depenses, onSave, players, stages }) {
       <div style={{ fontSize: 11.5, color: T.dim, marginBottom: 20, lineHeight: 1.6 }}>
         Revenus joueurs = somme des tarifs mensuels réels renseignés sur chaque fiche joueur — aucune estimation automatique, un tarif manquant compte pour 0€ (et déclenche l'alerte ci-dessus). Ce chiffre n'est pas encore historisé mois par mois.
         Revenus stages = inscrits × tarif (+ supplément hébergement le cas échéant) des stages dont la date de début tombe en {activeMois}.
-        Les prestations coachs et les autres dépenses, elles, sont bien propres au mois sélectionné ({activeMois}).
+        Les prestations coachs, autres recettes et autres dépenses sont propres au mois sélectionné ({activeMois}) — montants signés (+ recette, − dépense), comme dans un relevé bancaire.
       </div>
 
       <div style={styles.ckSection}><div style={styles.ckTitle}>Prestations coachs · {activeMois}</div></div>
       <section style={styles.panel}>
         {prestations.length === 0 ? (
           <div style={styles.emptyPanel}>Aucune prestation enregistrée pour {activeMois}.</div>
-        ) : prestations.slice().sort((a, b) => b.montant - a.montant).map(d => (
-          <DepenseRow key={d.id} d={d} eur={eur} onEdit={() => setModal(d)} onDelete={() => remove(d.id)} />
+        ) : prestations.slice().sort((a, b) => a.montant - b.montant).map(d => (
+          <DepenseRow key={d.id} d={d} eur={eurSigne} onEdit={() => setModal(d)} onDelete={() => remove(d.id)} />
         ))}
       </section>
 
-      <div style={{ ...styles.ckSection, marginTop: 24 }}><div style={styles.ckTitle}>Autres dépenses · {activeMois}</div></div>
+      <div style={{ ...styles.ckSection, marginTop: 24 }}><div style={styles.ckTitle}>Autres recettes & dépenses · {activeMois}</div></div>
       <section style={styles.panel}>
         {autres.length === 0 ? (
-          <div style={styles.emptyPanel}>Aucune dépense enregistrée pour {activeMois}.</div>
-        ) : autres.map(d => (
-          <DepenseRow key={d.id} d={d} eur={eur} onEdit={() => setModal(d)} onDelete={() => remove(d.id)} />
+          <div style={styles.emptyPanel}>Aucun mouvement enregistré pour {activeMois}.</div>
+        ) : autres.slice().sort((a, b) => b.montant - a.montant).map(d => (
+          <DepenseRow key={d.id} d={d} eur={eurSigne} onEdit={() => setModal(d)} onDelete={() => remove(d.id)} />
         ))}
       </section>
 
@@ -1774,13 +1997,14 @@ function RecettesModal({ players, eur, onClose }) {
 
 function DepenseRow({ d, eur, onEdit, onDelete }) {
   const [confirm, setConfirm] = useState(false);
+  const positif = (d.montant || 0) >= 0;
   return (
     <div style={styles.row}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700 }}>{d.libelle}</div>
         <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>{d.categorie}</div>
       </div>
-      <div style={{ fontSize: 14.5, fontWeight: 800, color: T.text, marginRight: 16 }}>{eur(d.montant || 0)}</div>
+      <div style={{ fontSize: 14.5, fontWeight: 800, color: positif ? T.green : T.red, marginRight: 16 }}>{eur(d.montant || 0)}</div>
       <div style={{ display: "flex", gap: 4 }}>
         {confirm ? (
           <button style={{ ...styles.iconBtn, color: T.red, borderColor: `${T.red}55` }} onClick={onDelete} title="Confirmer"><Check size={14} /></button>
@@ -1796,16 +2020,27 @@ function DepenseRow({ d, eur, onEdit, onDelete }) {
 }
 
 function DepenseModal({ initial, defaultMois, onSave, onClose }) {
+  const RECETTE_PAR_DEFAUT = ["Cotisations familles / adhérents", "Sponsoring", "Aide apprentissage (État)"];
   const [f, setF] = useState(initial || {
     id: "dep" + Date.now(), mois: defaultMois || moisLabelNow(), categorie: DEPENSES_CATEGORIES[0], libelle: "", montant: 0,
   });
+  const [type, setType] = useState(() => {
+    if (initial) return (initial.montant || 0) >= 0 ? "recette" : "depense";
+    return "depense";
+  });
   const set = (k, v) => setF({ ...f, [k]: v });
-  const canSave = f.libelle.trim().length > 0 && f.montant > 0 && f.mois && f.mois.trim().length > 0;
+  const setCategorie = (v) => {
+    setF({ ...f, categorie: v });
+    if (!initial) setType(RECETTE_PAR_DEFAUT.includes(v) ? "recette" : "depense");
+  };
+  const montantAbs = Math.abs(f.montant || 0);
+  const canSave = f.libelle.trim().length > 0 && montantAbs > 0 && f.mois && f.mois.trim().length > 0;
+  const save = () => onSave({ ...f, montant: type === "recette" ? montantAbs : -montantAbs });
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHead}>
-          <span style={styles.modalTitle}>{initial ? "Modifier la dépense" : "Nouvelle dépense"}</span>
+          <span style={styles.modalTitle}>{initial ? "Modifier le mouvement" : "Nouveau mouvement"}</span>
           <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
         </div>
         <div style={styles.modalBody}>
@@ -1814,15 +2049,20 @@ function DepenseModal({ initial, defaultMois, onSave, onClose }) {
               <input style={styles.input} value={f.mois || ""} placeholder="Juillet 2026" onChange={(e) => set("mois", e.target.value)} />
             </Field>
             <Field label="Catégorie">
-              <Select value={f.categorie} onChange={(v) => set("categorie", v)} options={DEPENSES_CATEGORIES.map(c => [c, c])} />
+              <Select value={f.categorie} onChange={setCategorie} options={DEPENSES_CATEGORIES.map(c => [c, c])} />
             </Field>
           </div>
           <Field label={f.categorie === "Prestations coachs" ? "Nom du coach" : "Libellé"} full>
             <input style={styles.input} value={f.libelle} placeholder={f.categorie === "Prestations coachs" ? "Prénom Nom" : "Location des courts"} onChange={(e) => set("libelle", e.target.value)} />
           </Field>
-          <Field label="Montant (€)" full>
-            <input style={styles.input} type="number" value={f.montant} onChange={(e) => set("montant", +e.target.value)} />
-          </Field>
+          <div style={styles.grid2}>
+            <Field label="Type">
+              <Select value={type} onChange={setType} options={[["depense", "Dépense (−)"], ["recette", "Recette (+)"]]} />
+            </Field>
+            <Field label="Montant (€)">
+              <input style={styles.input} type="number" value={montantAbs} onChange={(e) => set("montant", +e.target.value)} />
+            </Field>
+          </div>
           {f.categorie === "Prestations coachs" && (
             <div style={{ fontSize: 11.5, color: T.dim, lineHeight: 1.5 }}>
               Ce nom doit correspondre à celui utilisé dans le champ « Coach » des fiches joueurs, pour que le rendement par coach se calcule correctement.
@@ -1831,7 +2071,7 @@ function DepenseModal({ initial, defaultMois, onSave, onClose }) {
         </div>
         <div style={styles.modalFoot}>
           <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
-          <button style={{ ...styles.primaryBtn, opacity: canSave ? 1 : 0.5, cursor: canSave ? "pointer" : "not-allowed" }} onClick={() => canSave && onSave(f)}><Check size={16} /> Enregistrer</button>
+          <button style={{ ...styles.primaryBtn, opacity: canSave ? 1 : 0.5, cursor: canSave ? "pointer" : "not-allowed" }} onClick={() => canSave && save()}><Check size={16} /> Enregistrer</button>
         </div>
       </div>
     </div>
@@ -1988,7 +2228,7 @@ function StagiairesView({ stages, onSaveStages }) {
                 {p.nomComplet} {p.classement && <span style={{ color: T.mute, fontWeight: 500 }}>· {p.classement}</span>}{p.age && <span style={{ color: T.mute, fontWeight: 500 }}> · {p.age} ans</span>}
               </div>
               <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>
-                {p.email || <span style={{ color: T.amber }}>pas d'email</span>}{p.telephone ? ` · ${p.telephone}` : ""}{p.dateNaissance ? ` · né(e) le ${p.dateNaissance}` : ""}{p.nationalite ? ` · ${p.nationalite}` : ""} · {p.stages.length} stage{p.stages.length > 1 ? "s" : ""}
+                {p.email || <span style={{ color: T.amber }}>pas d'email</span>} · {p.stages.length} stage{p.stages.length > 1 ? "s" : ""}
               </div>
             </div>
             <button style={styles.iconBtn} onClick={() => setEditing(p)}><Pencil size={13} /></button>
@@ -3516,17 +3756,21 @@ function generateBilanAnnuelPdf(depenses, stages, players) {
 
   const rows = moisListe.map(m => {
     const depMois = dList.filter(d => d.mois === m);
-    const prestations = depMois.filter(d => d.categorie === "Prestations coachs").reduce((a, d) => a + (d.montant || 0), 0);
-    const autres = depMois.filter(d => d.categorie !== "Prestations coachs").reduce((a, d) => a + (d.montant || 0), 0);
+    const prestations = depMois.filter(d => d.categorie === "Prestations coachs").reduce((a, d) => a + (d.montant || 0), 0); // négatif
+    const autresMois = depMois.filter(d => d.categorie !== "Prestations coachs");
+    const autresRecettes = autresMois.filter(d => (d.montant || 0) > 0).reduce((a, d) => a + d.montant, 0);
+    const autresDepenses = autresMois.filter(d => (d.montant || 0) < 0).reduce((a, d) => a + d.montant, 0); // négatif
     const revenuStages = caStagesMois(sList, m);
-    return { mois: m, prestations, autres, totalDepenses: prestations + autres, revenuStages };
+    const solde = prestations + autresRecettes + autresDepenses + revenuStages;
+    return { mois: m, prestations, autresRecettes, autresDepenses, revenuStages, solde };
   });
   const totalPrestations = rows.reduce((a, r) => a + r.prestations, 0);
-  const totalAutres = rows.reduce((a, r) => a + r.autres, 0);
-  const totalDepenses = totalPrestations + totalAutres;
+  const totalAutresRecettes = rows.reduce((a, r) => a + r.autresRecettes, 0);
+  const totalAutresDepenses = rows.reduce((a, r) => a + r.autresDepenses, 0);
   const totalStages = rows.reduce((a, r) => a + r.revenuStages, 0);
+  const totalSolde = rows.reduce((a, r) => a + r.solde, 0);
 
-  // Répartition annuelle des "autres dépenses" par catégorie
+  // Répartition annuelle par catégorie (hors prestations coachs) — montants signés
   const parCategorie = {};
   dList.filter(d => d.categorie !== "Prestations coachs" && moisSet.has(d.mois)).forEach(d => {
     parCategorie[d.categorie] = (parCategorie[d.categorie] || 0) + (d.montant || 0);
@@ -3549,6 +3793,7 @@ function generateBilanAnnuelPdf(depenses, stages, players) {
   const hLine = (x, yTop, w, hex, thickness = 1) => rectTop(x, yTop, w, thickness, hex);
 
   const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
+  const eurSigne = (n) => `${n >= 0 ? "+" : "-"}€${Math.abs(Math.round(n)).toLocaleString("fr-FR")}`;
   let y = 56;
 
   // En-tête
@@ -3564,16 +3809,17 @@ function generateBilanAnnuelPdf(depenses, stages, players) {
   text(marginX, y, 10, "SYNTHÈSE DE LA PÉRIODE", "#646464", true);
   y += 18;
   const synthese = [
-    ["Prestations coachs", eur(totalPrestations)],
-    ["Autres dépenses", eur(totalAutres)],
-    ["Total dépenses", eur(totalDepenses)],
+    ["Prestations coachs", eurSigne(totalPrestations)],
+    ["Autres recettes", eurSigne(totalAutresRecettes)],
+    ["Autres dépenses", eurSigne(totalAutresDepenses)],
     ["Revenus stages", eur(totalStages)],
+    ["Solde net", eurSigne(totalSolde)],
   ];
   const colW = (pageW - marginX * 2) / synthese.length;
   synthese.forEach(([label, val], i) => {
     const x = marginX + i * colW;
-    text(x, y, 8.5, label, "#828282");
-    text(x, y + 16, 12.5, val, "#141414", true);
+    text(x, y, 8, label, "#828282");
+    text(x, y + 16, 11.5, val, "#141414", true);
   });
   y += 40;
 
@@ -3581,42 +3827,45 @@ function generateBilanAnnuelPdf(depenses, stages, players) {
   text(marginX, y, 10, "DÉTAIL MOIS PAR MOIS", "#646464", true);
   y += 16;
   const cols = [
-    { label: "Mois", w: 130 },
-    { label: "Prestations coachs", w: 105 },
-    { label: "Autres dépenses", w: 100 },
-    { label: "Total dépenses", w: 95 },
-    { label: "Revenus stages", w: 77 },
+    { label: "Mois", w: 110 },
+    { label: "Prestations coachs", w: 95 },
+    { label: "Autres recettes", w: 90 },
+    { label: "Autres dépenses", w: 90 },
+    { label: "Revenus stages", w: 70 },
+    { label: "Solde", w: 52 },
   ];
   let x0 = marginX;
   const colX = cols.map(c => { const x = x0; x0 += c.w; return x; });
   rectTop(marginX, y, pageW - marginX * 2, 18, "#f0f0f0");
-  cols.forEach((c, i) => text(colX[i] + 4, y + 13, 8.5, c.label, "#646464", true));
+  cols.forEach((c, i) => text(colX[i] + 4, y + 13, 8, c.label, "#646464", true));
   y += 18;
   rows.forEach((r, i) => {
     if (i % 2 === 1) rectTop(marginX, y, pageW - marginX * 2, 16, "#f7f7f7");
-    text(colX[0] + 4, y + 11, 9, r.mois, "#1e1e1e");
-    text(colX[1] + 4, y + 11, 9, eur(r.prestations), "#1e1e1e");
-    text(colX[2] + 4, y + 11, 9, eur(r.autres), "#1e1e1e");
-    text(colX[3] + 4, y + 11, 9, eur(r.totalDepenses), "#1e1e1e", true);
-    text(colX[4] + 4, y + 11, 9, eur(r.revenuStages), "#1c9e56");
+    text(colX[0] + 4, y + 11, 8.5, r.mois, "#1e1e1e");
+    text(colX[1] + 4, y + 11, 8.5, eurSigne(r.prestations), "#1e1e1e");
+    text(colX[2] + 4, y + 11, 8.5, eurSigne(r.autresRecettes), "#1c9e56");
+    text(colX[3] + 4, y + 11, 8.5, eurSigne(r.autresDepenses), "#1e1e1e");
+    text(colX[4] + 4, y + 11, 8.5, eur(r.revenuStages), "#1c9e56");
+    text(colX[5] + 4, y + 11, 8.5, eurSigne(r.solde), r.solde >= 0 ? "#1c9e56" : "#c9382f", true);
     y += 16;
   });
   hLine(marginX, y, pageW - marginX * 2, "#141414", 0.8);
   y += 4;
-  text(colX[0] + 4, y + 11, 9, "TOTAL", "#141414", true);
-  text(colX[1] + 4, y + 11, 9, eur(totalPrestations), "#141414", true);
-  text(colX[2] + 4, y + 11, 9, eur(totalAutres), "#141414", true);
-  text(colX[3] + 4, y + 11, 9, eur(totalDepenses), "#141414", true);
-  text(colX[4] + 4, y + 11, 9, eur(totalStages), "#1c9e56", true);
+  text(colX[0] + 4, y + 11, 8.5, "TOTAL", "#141414", true);
+  text(colX[1] + 4, y + 11, 8.5, eurSigne(totalPrestations), "#141414", true);
+  text(colX[2] + 4, y + 11, 8.5, eurSigne(totalAutresRecettes), "#1c9e56", true);
+  text(colX[3] + 4, y + 11, 8.5, eurSigne(totalAutresDepenses), "#141414", true);
+  text(colX[4] + 4, y + 11, 8.5, eur(totalStages), "#1c9e56", true);
+  text(colX[5] + 4, y + 11, 8.5, eurSigne(totalSolde), totalSolde >= 0 ? "#1c9e56" : "#c9382f", true);
   y += 30;
 
   // Répartition par catégorie
   if (categorieRows.length > 0) {
-    text(marginX, y, 10, "RÉPARTITION DES AUTRES DÉPENSES PAR CATÉGORIE", "#646464", true);
+    text(marginX, y, 10, "RÉPARTITION PAR CATÉGORIE (hors prestations coachs, hors stages/joueurs)", "#646464", true);
     y += 16;
     categorieRows.forEach(([cat, montant]) => {
       text(marginX, y, 9.5, cat, "#5a5a5a");
-      textRight(pageW - marginX, y, 9.5, eur(montant), "#141414", true);
+      textRight(pageW - marginX, y, 9.5, eurSigne(montant), montant >= 0 ? "#1c9e56" : "#141414", true);
       y += 15;
     });
     y += 14;
