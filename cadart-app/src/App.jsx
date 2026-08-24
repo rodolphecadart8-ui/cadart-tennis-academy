@@ -1644,7 +1644,7 @@ function AIAssistantView({ players, stages, depenses }) {
       setResult(text);
     } catch (e) {
       console.error("Assistant IA — échec de génération :", e);
-      setError("Impossible de générer les recommandations pour le moment. Réessaie dans un instant.");
+      setError("Fonction IA pas encore activée sur ce site (nécessite une clé API Anthropic à configurer — à faire plus tard, on en a parlé ensemble).");
     } finally {
       setLoading(false);
     }
@@ -1708,26 +1708,44 @@ function DepensesView({ depenses, onSave, players, stages }) {
   const list = depenses || [];
   const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
   // Montant signé : positif = recette, négatif = dépense (comme dans un relevé bancaire)
-  const eurSigne = (n) => `${n >= 0 ? "+" : "-"}€${Math.abs(Math.round(n)).toLocaleString("fr-FR")}`;
+  const eurSigne = (n) => (n === 0 ? "—" : `${n >= 0 ? "+" : "-"}€${Math.abs(Math.round(n)).toLocaleString("fr-FR")}`);
 
-  const mois = useMemo(() => {
+  const moisListe = useMemo(() => {
     const uniq = [...new Set(list.map(d => d.mois).filter(Boolean))];
     return uniq.sort((a, b) => moisSortKey(a) - moisSortKey(b));
   }, [list]);
 
-  const [selectedMois, setSelectedMois] = useState(null);
-  const [addingMois, setAddingMois] = useState(false);
-  const [newMoisLabel, setNewMoisLabel] = useState(moisLabelNow());
-  useEffect(() => {
-    if (!selectedMois && mois.length > 0) setSelectedMois(mois[mois.length - 1]);
-  }, [mois, selectedMois]);
-  const activeMois = selectedMois || (mois.length ? mois[mois.length - 1] : moisLabelNow());
+  // Table principale : catégories × mois ("Prestations coachs" en une seule ligne agrégée, tout en bas)
+  const categories = useMemo(() => {
+    const cats = [...new Set(list.map(d => d.categorie).filter(Boolean))];
+    return cats.sort((a, b) => {
+      if (a === "Prestations coachs") return 1;
+      if (b === "Prestations coachs") return -1;
+      return a.localeCompare(b);
+    });
+  }, [list]);
 
+  const cellEntries = (categorie, mois, libelle) =>
+    list.filter(d => d.categorie === categorie && d.mois === mois && (libelle === undefined || d.libelle === libelle));
+  const cellValue = (categorie, mois, libelle) => cellEntries(categorie, mois, libelle).reduce((a, d) => a + (d.montant || 0), 0);
+  const catTotal = (cat) => moisListe.reduce((a, m) => a + cellValue(cat, m), 0);
+  const moisTotal = (mois) => categories.reduce((a, c) => a + cellValue(c, mois), 0);
+  const grandTotal = moisListe.reduce((a, m) => a + moisTotal(m), 0);
+
+  // Table secondaire : coachs × mois (uniquement la catégorie "Prestations coachs")
+  const coachs = useMemo(() => {
+    const names = [...new Set(list.filter(d => d.categorie === "Prestations coachs").map(d => d.libelle).filter(Boolean))];
+    return names.sort((a, b) => a.localeCompare(b));
+  }, [list]);
+  const coachTotal = (coach) => moisListe.reduce((a, m) => a + cellValue("Prestations coachs", m, coach), 0);
+  const coachMoisTotal = (mois) => coachs.reduce((a, c) => a + cellValue("Prestations coachs", mois, c), 0);
+  const coachGrandTotal = moisListe.reduce((a, m) => a + coachMoisTotal(m), 0);
+
+  const [cellModal, setCellModal] = useState(null); // { categorie, mois, libelle }
   const [modal, setModal] = useState(null);
-  const [showRecettes, setShowRecettes] = useState(false);
-  const [showStages, setShowStages] = useState(false);
   const fileInputRef = useRef(null);
   const [importMsg, setImportMsg] = useState(null);
+
   const upsert = (d) => {
     const ex = list.some(x => x.id === d.id);
     onSave(ex ? list.map(x => (x.id === d.id ? d : x)) : [...list, d]);
@@ -1769,32 +1787,19 @@ function DepensesView({ depenses, onSave, players, stages }) {
     setTimeout(() => URL.revokeObjectURL(url), 4000);
   };
 
-  const filtered = list.filter(d => d.mois === activeMois);
-  const prestations = filtered.filter(d => d.categorie === "Prestations coachs");
-  const autres = filtered.filter(d => d.categorie !== "Prestations coachs");
-  const totalPrestations = prestations.reduce((a, d) => a + (d.montant || 0), 0); // négatif
-  const autresRecettes = autres.filter(d => (d.montant || 0) > 0).reduce((a, d) => a + d.montant, 0);
-  const autresDepenses = autres.filter(d => (d.montant || 0) < 0).reduce((a, d) => a + d.montant, 0); // négatif
-  const allPlayers = players || [];
-  const playersSansTarif = allPlayers.filter(p => !p.tarifMensuel || p.tarifMensuel <= 0);
-  const revenuJoueurs = allPlayers.reduce((a, p) => a + (p.tarifMensuel || 0), 0);
-  const stagesMois = stagesDuMois(stages, activeMois);
-  const revenuStages = caStagesMois(stages, activeMois);
-  const marge = revenuJoueurs + revenuStages + totalPrestations + autresRecettes + autresDepenses;
-
-  const confirmNewMois = () => {
-    const label = newMoisLabel.trim();
-    if (!label) return;
-    setSelectedMois(label);
-    setAddingMois(false);
-  };
+  const cellStyle = (v, isTotal) => ({
+    padding: "8px 10px", textAlign: "right", fontSize: 12, fontWeight: isTotal ? 800 : 600, whiteSpace: "nowrap",
+    color: v === 0 ? T.dim : v > 0 ? T.green : T.red, cursor: "pointer", borderRadius: 6,
+  });
+  const rowLabelStyle = { padding: "8px 10px", fontSize: 12.5, fontWeight: 600, color: T.text, whiteSpace: "nowrap", position: "sticky", left: 0, background: T.card, zIndex: 1 };
+  const headStyle = { padding: "8px 10px", textAlign: "right", fontSize: 10.5, fontWeight: 700, color: T.dim, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap" };
 
   return (
     <main style={styles.main}>
       <header style={styles.header}>
         <div>
           <div style={styles.h1}>Dépenses</div>
-          <div style={styles.sub}>Vue mois par mois de la rentabilité</div>
+          <div style={styles.sub}>Synthèse par catégorie et par mois — montants signés (+ recette, − dépense)</div>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button style={styles.ghostBtn} onClick={downloadCSVTemplate} title="Télécharger un modèle CSV">
@@ -1804,10 +1809,10 @@ function DepensesView({ depenses, onSave, players, stages }) {
           <button style={styles.ghostBtn} onClick={() => fileInputRef.current && fileInputRef.current.click()} title="Importer un tableau de bord financier (CSV)">
             <UserPlus size={15} /> Importer CSV
           </button>
-          <button style={styles.ghostBtn} onClick={() => generateBilanAnnuelPdf(list, stages, allPlayers)} title="Générer un bilan pour le comptable">
+          <button style={styles.ghostBtn} onClick={() => generateBilanAnnuelPdf(list, stages, players || [])} title="Générer un bilan pour le comptable">
             <FileDown size={15} /> Bilan annuel (PDF)
           </button>
-          <button style={styles.primaryBtn} onClick={() => setModal("new")}><Plus size={16} /> Nouvelle dépense</button>
+          <button style={styles.primaryBtn} onClick={() => setModal({ id: "dep" + Date.now(), mois: moisListe[moisListe.length - 1] || moisLabelNow(), categorie: DEPENSES_CATEGORIES[0], libelle: "", montant: 0 })}><Plus size={16} /> Nouvelle dépense</button>
         </div>
       </header>
 
@@ -1817,92 +1822,106 @@ function DepensesView({ depenses, onSave, players, stages }) {
         </div>
       )}
 
-      {/* Sélecteur de mois */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 22 }}>
-        {mois.map(m => (
-          <button
-            key={m}
-            onClick={() => setSelectedMois(m)}
-            style={{
-              padding: "8px 16px", borderRadius: 20, fontSize: 13, fontWeight: 700, cursor: "pointer",
-              border: `1px solid ${m === activeMois ? T.green : T.border2}`,
-              background: m === activeMois ? T.greenGlow : "transparent",
-              color: m === activeMois ? T.green : T.mute,
-            }}
-          >
-            {m}
-          </button>
-        ))}
-        {!addingMois ? (
-          <button style={styles.ghostBtn} onClick={() => { setNewMoisLabel(moisLabelNow()); setAddingMois(true); }}>
-            <Plus size={13} /> Nouveau mois
-          </button>
-        ) : (
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input style={{ ...styles.input, width: 160 }} value={newMoisLabel} placeholder="Juillet 2026" onChange={(e) => setNewMoisLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && confirmNewMois()} />
-            <button style={styles.smallBtn} onClick={confirmNewMois}><Check size={13} /></button>
-            <button style={styles.iconBtn} onClick={() => setAddingMois(false)}><X size={13} /></button>
+      {moisListe.length === 0 ? (
+        <div style={styles.emptyPanel}>Aucune dépense enregistrée pour l'instant. Clique sur « Importer CSV » ou « Nouvelle dépense » pour commencer.</div>
+      ) : (
+        <>
+          <div style={styles.ckSection}><div style={styles.ckTitle}>Synthèse par catégorie et par mois</div><span style={styles.ckNote}>clique sur un montant pour voir le détail ou l'ajouter/modifier</span></div>
+          <div style={{ overflowX: "auto", border: `1px solid ${T.border}`, borderRadius: 12, marginBottom: 28 }}>
+            <table style={{ borderCollapse: "collapse", width: "100%" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                  <th style={{ ...rowLabelStyle, textAlign: "left", fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, color: T.dim }}>Catégorie</th>
+                  {moisListe.map(m => <th key={m} style={headStyle}>{m}</th>)}
+                  <th style={{ ...headStyle, color: T.text }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {categories.map(cat => (
+                  <tr key={cat} style={{ borderBottom: `1px solid ${T.border}` }}>
+                    <td style={rowLabelStyle}>{cat}</td>
+                    {moisListe.map(m => {
+                      const v = cellValue(cat, m);
+                      return (
+                        <td key={m} style={cellStyle(v)} onClick={() => setCellModal({ categorie: cat, mois: m })}>
+                          {eurSigne(v)}
+                        </td>
+                      );
+                    })}
+                    <td style={cellStyle(catTotal(cat), true)}>{eurSigne(catTotal(cat))}</td>
+                  </tr>
+                ))}
+                <tr style={{ borderTop: `2px solid ${T.border2}` }}>
+                  <td style={{ ...rowLabelStyle, fontWeight: 800 }}>RÉSULTAT NET</td>
+                  {moisListe.map(m => <td key={m} style={cellStyle(moisTotal(m), true)}>{eurSigne(moisTotal(m))}</td>)}
+                  <td style={cellStyle(grandTotal, true)}>{eurSigne(grandTotal)}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-        )}
-      </div>
 
-      <div style={styles.kpiRow}>
-        <Stat
-          icon={Euro} label="Revenus joueurs (actuel)" value={eur(revenuJoueurs)} onClick={() => setShowRecettes(true)}
-          sub={playersSansTarif.length > 0 ? `⚠️ ${playersSansTarif.length} sans tarif · voir détail` : `${allPlayers.length} joueurs · voir détail`}
-          subColor={playersSansTarif.length > 0 ? T.red : T.mute}
-        />
-        <Stat
-          icon={Tent} label={`Revenus stages · ${activeMois}`} value={eur(revenuStages)} onClick={() => setShowStages(true)}
-          sub={`${stagesMois.length} stage${stagesMois.length > 1 ? "s" : ""} · voir détail`} subColor={T.mute}
-        />
-        <Stat icon={TrendingUp} label={`Autres recettes · ${activeMois}`} value={eur(autresRecettes)} sub="cotisations, sponsoring, aides…" subColor={T.mute} />
-        <Stat icon={Wallet} label={`Prestations coachs · ${activeMois}`} value={eurSigne(totalPrestations)} sub={`${prestations.length} coach${prestations.length > 1 ? "s" : ""}`} subColor={T.red} tint={T.red} />
-        <Stat icon={Percent} label={`Autres dépenses · ${activeMois}`} value={eurSigne(autresDepenses)} sub={`${autres.filter(d => d.montant < 0).length} poste${autres.filter(d => d.montant < 0).length > 1 ? "s" : ""}`} subColor={T.red} tint={T.red} />
-        <Stat icon={TrendingUp} label="Marge estimée" value={eur(marge)} sub={marge >= 0 ? "positive" : "négative"} subColor={marge >= 0 ? T.green : T.red} tint={marge >= 0 ? T.green : T.red} />
-      </div>
-
-      {playersSansTarif.length > 0 && (
-        <div style={{ background: `${T.red}14`, border: `1px solid ${T.red}44`, color: T.red, borderRadius: 10, padding: "10px 14px", fontSize: 12.5, fontWeight: 600, marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
-          <AlertTriangle size={15} />
-          {playersSansTarif.length} joueur{playersSansTarif.length > 1 ? "s n'ont" : " n'a"} pas de tarif renseigné — {playersSansTarif.length > 1 ? "ils ne comptent" : "il ne compte"} pour 0€ dans le calcul. Clique sur « Revenus joueurs » pour voir qui, et corriger leur fiche.
-        </div>
+          {coachs.length > 0 && (
+            <>
+              <div style={styles.ckSection}><div style={styles.ckTitle}>Rémunération coachs / prestataires par mois</div></div>
+              <div style={{ overflowX: "auto", border: `1px solid ${T.border}`, borderRadius: 12, marginBottom: 20 }}>
+                <table style={{ borderCollapse: "collapse", width: "100%" }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                      <th style={{ ...rowLabelStyle, textAlign: "left", fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, color: T.dim }}>Coach</th>
+                      {moisListe.map(m => <th key={m} style={headStyle}>{m}</th>)}
+                      <th style={{ ...headStyle, color: T.text }}>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {coachs.map(coach => (
+                      <tr key={coach} style={{ borderBottom: `1px solid ${T.border}` }}>
+                        <td style={rowLabelStyle}>{coach}</td>
+                        {moisListe.map(m => {
+                          const v = cellValue("Prestations coachs", m, coach);
+                          return (
+                            <td key={m} style={cellStyle(v)} onClick={() => setCellModal({ categorie: "Prestations coachs", mois: m, libelle: coach })}>
+                              {eurSigne(v)}
+                            </td>
+                          );
+                        })}
+                        <td style={cellStyle(coachTotal(coach), true)}>{eurSigne(coachTotal(coach))}</td>
+                      </tr>
+                    ))}
+                    <tr style={{ borderTop: `2px solid ${T.border2}` }}>
+                      <td style={{ ...rowLabelStyle, fontWeight: 800 }}>TOTAL</td>
+                      {moisListe.map(m => <td key={m} style={cellStyle(coachMoisTotal(m), true)}>{eurSigne(coachMoisTotal(m))}</td>)}
+                      <td style={cellStyle(coachGrandTotal, true)}>{eurSigne(coachGrandTotal)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </>
       )}
 
-      <div style={{ fontSize: 11.5, color: T.dim, marginBottom: 20, lineHeight: 1.6 }}>
-        Revenus joueurs = somme des tarifs mensuels réels renseignés sur chaque fiche joueur — aucune estimation automatique, un tarif manquant compte pour 0€ (et déclenche l'alerte ci-dessus). Ce chiffre n'est pas encore historisé mois par mois.
-        Revenus stages = inscrits × tarif (+ supplément hébergement le cas échéant) des stages dont la date de début tombe en {activeMois}.
-        Les prestations coachs, autres recettes et autres dépenses sont propres au mois sélectionné ({activeMois}) — montants signés (+ recette, − dépense), comme dans un relevé bancaire.
-      </div>
-
-      <div style={styles.ckSection}><div style={styles.ckTitle}>Prestations coachs · {activeMois}</div></div>
-      <section style={styles.panel}>
-        {prestations.length === 0 ? (
-          <div style={styles.emptyPanel}>Aucune prestation enregistrée pour {activeMois}.</div>
-        ) : prestations.slice().sort((a, b) => a.montant - b.montant).map(d => (
-          <DepenseRow key={d.id} d={d} eur={eurSigne} onEdit={() => setModal(d)} onDelete={() => remove(d.id)} />
-        ))}
-      </section>
-
-      <div style={{ ...styles.ckSection, marginTop: 24 }}><div style={styles.ckTitle}>Autres recettes & dépenses · {activeMois}</div></div>
-      <section style={styles.panel}>
-        {autres.length === 0 ? (
-          <div style={styles.emptyPanel}>Aucun mouvement enregistré pour {activeMois}.</div>
-        ) : autres.slice().sort((a, b) => b.montant - a.montant).map(d => (
-          <DepenseRow key={d.id} d={d} eur={eurSigne} onEdit={() => setModal(d)} onDelete={() => remove(d.id)} />
-        ))}
-      </section>
+      {cellModal && (
+        <CellEntriesModal
+          categorie={cellModal.categorie}
+          mois={cellModal.mois}
+          libelle={cellModal.libelle}
+          entries={cellEntries(cellModal.categorie, cellModal.mois, cellModal.libelle)}
+          eur={eurSigne}
+          onEdit={(entry) => { setCellModal(null); setModal(entry); }}
+          onDelete={remove}
+          onAddNew={() => {
+            setCellModal(null);
+            setModal({
+              id: "dep" + Date.now(), mois: cellModal.mois, categorie: cellModal.categorie,
+              libelle: cellModal.libelle || "", montant: 0,
+            });
+          }}
+          onClose={() => setCellModal(null)}
+        />
+      )}
 
       {modal && (
-        <DepenseModal initial={modal === "new" ? null : modal} defaultMois={activeMois} onSave={upsert} onClose={() => setModal(null)} />
-      )}
-
-      {showRecettes && (
-        <RecettesModal players={allPlayers} eur={eur} onClose={() => setShowRecettes(false)} />
-      )}
-
-      {showStages && (
-        <StagesRevenuModal stages={stagesMois} mois={activeMois} eur={eur} onClose={() => setShowStages(false)} />
+        <DepenseModal initial={modal} isNew={!list.some(x => x.id === modal.id)} onSave={upsert} onClose={() => setModal(null)} />
       )}
 
       <footer style={styles.footer}>CADART Tennis Academy · Dépenses — enregistré automatiquement.</footer>
@@ -1910,128 +1929,57 @@ function DepensesView({ depenses, onSave, players, stages }) {
   );
 }
 
-function StagesRevenuModal({ stages, mois, eur, onClose }) {
-  const rows = (stages || []).map(s => {
-    const parts = (s.participants || []).map(x => (typeof x === "string" ? { nom: x, hebergement: false } : x));
-    const avecHeb = parts.filter(x => x.hebergement).length;
-    const revenu = parts.length * (s.tarif || 0) + avecHeb * (s.hebergementTarif || 0);
-    return { ...s, nbInscrits: parts.length, revenu };
-  }).sort((a, b) => b.revenu - a.revenu);
-  const total = rows.reduce((a, s) => a + s.revenu, 0);
+function CellEntriesModal({ categorie, mois, libelle, entries, eur, onEdit, onDelete, onAddNew, onClose }) {
+  const total = entries.reduce((a, d) => a + (d.montant || 0), 0);
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHead}>
           <div>
-            <span style={styles.modalTitle}>Revenus stages — {mois}</span>
-            <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{rows.length} stage{rows.length > 1 ? "s" : ""} · total {eur(total)}</div>
+            <span style={styles.modalTitle}>{libelle || categorie}</span>
+            <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{mois}{entries.length > 0 ? ` · ${eur(total)}` : ""}</div>
           </div>
           <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
         </div>
         <div style={styles.modalBody}>
-          {rows.length === 0 ? (
-            <div style={styles.miniEmpty}>Aucun stage ne commence en {mois}.</div>
-          ) : rows.map(s => (
-            <div key={s.id} style={styles.row}>
+          {entries.length === 0 ? (
+            <div style={styles.miniEmpty}>Aucune ligne pour {mois}.</div>
+          ) : entries.map(d => (
+            <div key={d.id} style={styles.row}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 700 }}>{s.nom}</div>
-                <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>{s.du} → {s.au} · {s.nbInscrits} inscrit{s.nbInscrits > 1 ? "s" : ""} × {eur(s.tarif || 0)}</div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{d.libelle}</div>
+                {!libelle && <div style={{ fontSize: 11, color: T.mute, marginTop: 2 }}>{d.categorie}</div>}
               </div>
-              <div style={{ fontSize: 14, fontWeight: 800, color: T.text }}>{eur(s.revenu)}</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: (d.montant || 0) >= 0 ? T.green : T.red, marginRight: 10 }}>{eur(d.montant || 0)}</div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button style={styles.iconBtn} onClick={() => onEdit(d)} title="Modifier"><Pencil size={13} /></button>
+                <button style={styles.iconBtn} onClick={() => onDelete(d.id)} title="Supprimer"><Trash2 size={13} /></button>
+              </div>
             </div>
           ))}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function RecettesModal({ players, eur, onClose }) {
-  const sorted = (players || []).slice().sort((a, b) => {
-    const aOk = a.tarifMensuel > 0, bOk = b.tarifMensuel > 0;
-    if (aOk !== bOk) return aOk ? 1 : -1; // les joueurs sans tarif en premier
-    return (b.tarifMensuel || 0) - (a.tarifMensuel || 0);
-  });
-  const total = sorted.reduce((a, p) => a + (p.tarifMensuel || 0), 0);
-  const manquants = sorted.filter(p => !p.tarifMensuel || p.tarifMensuel <= 0).length;
-  return (
-    <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
-        <div style={styles.modalHead}>
-          <div>
-            <span style={styles.modalTitle}>Détail des recettes joueurs</span>
-            <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{sorted.length} joueurs · total {eur(total)}</div>
-          </div>
-          <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
-        </div>
-        <div style={styles.modalBody}>
-          {manquants > 0 && (
-            <div style={{ background: `${T.red}14`, border: `1px solid ${T.red}44`, color: T.red, borderRadius: 10, padding: "10px 14px", fontSize: 12.5, fontWeight: 600, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
-              <AlertTriangle size={15} /> {manquants} joueur{manquants > 1 ? "s" : ""} sans tarif renseigné — corrige leur fiche (bouton Modifier).
-            </div>
-          )}
-          {sorted.length === 0 ? (
-            <div style={styles.miniEmpty}>Aucun joueur enregistré.</div>
-          ) : sorted.map(p => {
-            const missing = !p.tarifMensuel || p.tarifMensuel <= 0;
-            return (
-              <div key={p.id} style={{ ...styles.row, ...(missing ? { background: `${T.red}0d`, borderRadius: 8 } : {}) }}>
-                <span style={{ ...styles.avatarSm, background: missing ? `${T.red}18` : `${T.green}18`, color: missing ? T.red : T.green, borderColor: missing ? `${T.red}33` : `${T.green}33` }}>
-                  {initials(p.name)}
-                </span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700 }}>{p.name}</div>
-                  {missing && <div style={{ fontSize: 11, color: T.red, marginTop: 1 }}>Tarif non renseigné</div>}
-                </div>
-                <div style={{ fontSize: 14, fontWeight: 800, color: missing ? T.red : T.text }}>
-                  {missing ? "⚠️ 0€" : eur(p.tarifMensuel)}
-                </div>
-              </div>
-            );
-          })}
+        <div style={styles.modalFoot}>
+          <button style={styles.ghostBtn} onClick={onClose}>Fermer</button>
+          <button style={styles.primaryBtn} onClick={onAddNew}><Plus size={16} /> Ajouter une ligne</button>
         </div>
       </div>
     </div>
   );
 }
 
-function DepenseRow({ d, eur, onEdit, onDelete }) {
-  const [confirm, setConfirm] = useState(false);
-  const positif = (d.montant || 0) >= 0;
-  return (
-    <div style={styles.row}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 700 }}>{d.libelle}</div>
-        <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>{d.categorie}</div>
-      </div>
-      <div style={{ fontSize: 14.5, fontWeight: 800, color: positif ? T.green : T.red, marginRight: 16 }}>{eur(d.montant || 0)}</div>
-      <div style={{ display: "flex", gap: 4 }}>
-        {confirm ? (
-          <button style={{ ...styles.iconBtn, color: T.red, borderColor: `${T.red}55` }} onClick={onDelete} title="Confirmer"><Check size={14} /></button>
-        ) : (
-          <>
-            <button style={styles.iconBtn} onClick={onEdit} title="Modifier"><Pencil size={13} /></button>
-            <button style={styles.iconBtn} onClick={() => setConfirm(true)} title="Supprimer"><Trash2 size={13} /></button>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DepenseModal({ initial, defaultMois, onSave, onClose }) {
+function DepenseModal({ initial, isNew, onSave, onClose }) {
   const RECETTE_PAR_DEFAUT = ["Cotisations familles / adhérents", "Sponsoring", "Aide apprentissage (État)"];
   const [f, setF] = useState(initial || {
-    id: "dep" + Date.now(), mois: defaultMois || moisLabelNow(), categorie: DEPENSES_CATEGORIES[0], libelle: "", montant: 0,
+    id: "dep" + Date.now(), mois: moisLabelNow(), categorie: DEPENSES_CATEGORIES[0], libelle: "", montant: 0,
   });
   const [type, setType] = useState(() => {
-    if (initial) return (initial.montant || 0) >= 0 ? "recette" : "depense";
-    return "depense";
+    if (!isNew) return (initial && initial.montant || 0) >= 0 ? "recette" : "depense";
+    return RECETTE_PAR_DEFAUT.includes(f.categorie) ? "recette" : "depense";
   });
   const set = (k, v) => setF({ ...f, [k]: v });
   const setCategorie = (v) => {
     setF({ ...f, categorie: v });
-    if (!initial) setType(RECETTE_PAR_DEFAUT.includes(v) ? "recette" : "depense");
+    if (isNew) setType(RECETTE_PAR_DEFAUT.includes(v) ? "recette" : "depense");
   };
   const montantAbs = Math.abs(f.montant || 0);
   const canSave = f.libelle.trim().length > 0 && montantAbs > 0 && f.mois && f.mois.trim().length > 0;
@@ -2040,7 +1988,7 @@ function DepenseModal({ initial, defaultMois, onSave, onClose }) {
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHead}>
-          <span style={styles.modalTitle}>{initial ? "Modifier le mouvement" : "Nouveau mouvement"}</span>
+          <span style={styles.modalTitle}>{isNew ? "Nouveau mouvement" : "Modifier le mouvement"}</span>
           <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
         </div>
         <div style={styles.modalBody}>
@@ -2554,7 +2502,7 @@ Notes du coach à intégrer (ne rien inventer au-delà) :
       set("compteRendu", text.trim());
     } catch (e) {
       console.error("Génération compte rendu impossible :", e);
-      setGenError("Génération impossible pour le moment. Réessaie dans un instant.");
+      setGenError("Fonction IA pas encore activée sur ce site (nécessite une clé API — à faire plus tard). En attendant, tu peux écrire le compte rendu directement dans le champ ci-dessous.");
     } finally {
       setGenLoading(false);
     }
