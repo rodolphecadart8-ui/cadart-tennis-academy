@@ -138,6 +138,13 @@ function classementRangIndex(val) {
   return idx === -1 ? FFT_ORDRE.length : idx; // valeur non reconnue = juste avant "non renseigné"
 }
 
+/* Extrait le nom de famille d'un nom complet stocké en un seul champ ("Prénom Nom" → "Nom") :
+   heuristique simple qui prend le dernier mot, faute de champs prénom/nom séparés pour les joueurs. */
+function nomDeFamille(nomComplet) {
+  const mots = (nomComplet || "").trim().split(/\s+/);
+  return mots.length ? mots[mots.length - 1] : "";
+}
+
 /* Repères Top 50 mondial pour les 8 données clés du rapport mensuel (échelle réelle, pas /100) */
 const MONTHLY_METRICS = [
   { key: "vitesseService", label: "Vitesse service", unit: " km/h", max: 230, bench: 210 },
@@ -1846,7 +1853,7 @@ function agregerStagiaires(stages) {
       if (!map.has(cle)) {
         map.set(cle, {
           cle, prenom: p.prenom || "", nom: p.nom || "", nomComplet,
-          classement: p.classement || "", age: p.age || null, objectifs: p.objectifs || "",
+          classement: p.classement || "", age: p.age || null, dateNaissance: p.dateNaissance || "", nationalite: p.nationalite || "", objectifs: p.objectifs || "",
           email: p.email || "", telephone: p.telephone || "",
           stages: [],
         });
@@ -1855,13 +1862,23 @@ function agregerStagiaires(stages) {
       // Complète les champs manquants avec les infos les plus récentes trouvées
       if (!entry.classement && p.classement) entry.classement = p.classement;
       if (!entry.age && p.age) entry.age = p.age;
+      if (!entry.dateNaissance && p.dateNaissance) entry.dateNaissance = p.dateNaissance;
+      if (!entry.nationalite && p.nationalite) entry.nationalite = p.nationalite;
       if (!entry.objectifs && p.objectifs) entry.objectifs = p.objectifs;
       if (!entry.email && p.email) entry.email = p.email;
       if (!entry.telephone && p.telephone) entry.telephone = p.telephone;
-      entry.stages.push({ nom: s.nom, du: s.du, hebergement: !!p.hebergement, dateArrivee: p.dateArrivee || "", dateDepart: p.dateDepart || "" });
+      const montant = (s.tarif || 0) + (p.hebergement ? (s.hebergementTarif || 0) : 0);
+      entry.stages.push({ nom: s.nom, du: s.du, au: s.au, type: s.type, hebergement: !!p.hebergement, dateArrivee: p.dateArrivee || "", dateDepart: p.dateDepart || "", montant, paye: !!p.paye });
     });
   });
-  return [...map.values()].sort((a, b) => a.nomComplet.localeCompare(b.nomComplet));
+  const result = [...map.values()];
+  result.forEach(p => {
+    p.stages.sort((a, b) => {
+      const da = parseFRDate(a.du); const db = parseFRDate(b.du);
+      return (db ? db.getTime() : 0) - (da ? da.getTime() : 0); // plus récent en premier
+    });
+  });
+  return result.sort((a, b) => (a.nom || "").localeCompare(b.nom || "") || (a.prenom || "").localeCompare(b.prenom || ""));
 }
 
 function StagiairesView({ stages, onSaveStages }) {
@@ -1892,8 +1909,8 @@ function StagiairesView({ stages, onSaveStages }) {
   const mailtoHref = `mailto:?bcc=${encodeURIComponent(emailsSelectionnes.join(","))}&subject=${encodeURIComponent("Actus CADART Tennis Academy")}`;
 
   const exportCSV = () => {
-    const header = "prenom,nom,classement,age,email,telephone\n";
-    const rows = list.map(p => [p.prenom, p.nom, p.classement, p.age || "", p.email, p.telephone].map(v => `"${(v || "").toString().replace(/"/g, '""')}"`).join(",")).join("\n");
+    const header = "prenom,nom,classement,age,date_naissance,nationalite,email,telephone\n";
+    const rows = list.map(p => [p.prenom, p.nom, p.classement, p.age || "", p.dateNaissance || "", p.nationalite || "", p.email, p.telephone].map(v => `"${(v || "").toString().replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([header + rows], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1916,6 +1933,22 @@ function StagiairesView({ stages, onSaveStages }) {
     });
     onSaveStages(nextStages);
     setEditing(null);
+  };
+
+  // Retire un stagiaire de TOUS les stages où il est inscrit (désinscription complète)
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const deleteStagiaire = (cle) => {
+    const nomMatch = (p) => {
+      const nomComplet = ((p.prenom || "") + " " + (p.nom || "")).trim().toLowerCase();
+      return (p.email && p.email.trim().toLowerCase()) === cle || nomComplet === cle;
+    };
+    const nextStages = (stages || []).map(s => {
+      const parts = (s.participants || []).map(p => (typeof p === "string" ? { nom: p, hebergement: false } : p));
+      return { ...s, participants: parts.filter(p => !nomMatch(p)) };
+    });
+    onSaveStages(nextStages);
+    setConfirmDelete(null);
+    const next = new Set(selected); next.delete(cle); setSelected(next);
   };
 
   return (
@@ -1955,10 +1988,15 @@ function StagiairesView({ stages, onSaveStages }) {
                 {p.nomComplet} {p.classement && <span style={{ color: T.mute, fontWeight: 500 }}>· {p.classement}</span>}{p.age && <span style={{ color: T.mute, fontWeight: 500 }}> · {p.age} ans</span>}
               </div>
               <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>
-                {p.email || <span style={{ color: T.amber }}>pas d'email</span>}{p.telephone ? ` · ${p.telephone}` : ""} · {p.stages.length} stage{p.stages.length > 1 ? "s" : ""}
+                {p.email || <span style={{ color: T.amber }}>pas d'email</span>}{p.telephone ? ` · ${p.telephone}` : ""}{p.dateNaissance ? ` · né(e) le ${p.dateNaissance}` : ""}{p.nationalite ? ` · ${p.nationalite}` : ""} · {p.stages.length} stage{p.stages.length > 1 ? "s" : ""}
               </div>
             </div>
             <button style={styles.iconBtn} onClick={() => setEditing(p)}><Pencil size={13} /></button>
+            {confirmDelete === p.cle ? (
+              <button style={{ ...styles.iconBtn, color: T.red, borderColor: `${T.red}55` }} onClick={() => deleteStagiaire(p.cle)} title="Confirmer la suppression"><Check size={13} /></button>
+            ) : (
+              <button style={styles.iconBtn} onClick={() => setConfirmDelete(p.cle)} title="Retirer ce stagiaire de tous ses stages"><Trash2 size={13} /></button>
+            )}
           </div>
         ))}
       </section>
@@ -1967,6 +2005,7 @@ function StagiairesView({ stages, onSaveStages }) {
         <StagiaireContactModal
           stagiaire={editing}
           onSave={(data) => saveContact(editing.cle, data)}
+          onDelete={() => { deleteStagiaire(editing.cle); setEditing(null); }}
           onClose={() => setEditing(null)}
         />
       )}
@@ -1976,9 +2015,12 @@ function StagiairesView({ stages, onSaveStages }) {
   );
 }
 
-function StagiaireContactModal({ stagiaire, onSave, onClose }) {
+function StagiaireContactModal({ stagiaire, onSave, onDelete, onClose }) {
   const [email, setEmail] = useState(stagiaire.email || "");
   const [telephone, setTelephone] = useState(stagiaire.telephone || "");
+  const [dateNaissance, setDateNaissance] = useState(stagiaire.dateNaissance || "");
+  const [nationalite, setNationalite] = useState(stagiaire.nationalite || "");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -1996,36 +2038,77 @@ function StagiaireContactModal({ stagiaire, onSave, onClose }) {
           <Field label="Téléphone" full>
             <input style={styles.input} value={telephone} placeholder="06 12 34 56 78" onChange={(e) => setTelephone(e.target.value)} />
           </Field>
+          <div style={styles.grid2}>
+            <Field label="Date de naissance">
+              <input style={styles.input} value={dateNaissance} placeholder="12/05/2011" onChange={(e) => setDateNaissance(e.target.value)} />
+            </Field>
+            <Field label="Nationalité">
+              <input style={styles.input} value={nationalite} placeholder="Française" onChange={(e) => setNationalite(e.target.value)} />
+            </Field>
+          </div>
           {stagiaire.objectifs && (
             <div style={{ fontSize: 12, color: T.mute, background: T.bg2, borderRadius: 8, padding: 10, marginBottom: 10 }}>
               <strong style={{ color: T.text }}>Objectifs :</strong> {stagiaire.objectifs}
             </div>
           )}
-          {stagiaire.stages.some(st => st.hebergement) && (
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: T.dim, marginBottom: 6 }}>
-                <Home size={12} style={{ verticalAlign: -2, marginRight: 4 }} color={T.blue} /> Dates hébergement (pour réservation hôtel)
+
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: T.dim }}>
+                Historique des stages & paiements ({stagiaire.stages.length})
               </div>
-              {stagiaire.stages.filter(st => st.hebergement).map((st, i) => (
-                <div key={i} style={{ fontSize: 12.5, color: T.text, background: `${T.blue}0d`, border: `1px solid ${T.blue}33`, borderRadius: 8, padding: "8px 10px", marginBottom: 6 }}>
+              {(() => {
+                const totalDu = stagiaire.stages.reduce((a, st) => a + (st.montant || 0), 0);
+                const totalPaye = stagiaire.stages.filter(st => st.paye).reduce((a, st) => a + (st.montant || 0), 0);
+                const restant = totalDu - totalPaye;
+                return restant > 0 ? (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: T.amber }}>{restant}€ restant{restant > 1 ? "s" : ""}</span>
+                ) : totalDu > 0 ? (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: T.green }}>Tout payé ✓</span>
+                ) : null;
+              })()}
+            </div>
+            {stagiaire.stages.map((st, i) => (
+              <div key={i} style={{ fontSize: 12.5, color: T.text, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8, padding: "8px 10px", marginBottom: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
                   <strong>{st.nom}</strong>
-                  <div style={{ color: T.mute, marginTop: 2 }}>
-                    {st.dateArrivee || st.dateDepart
-                      ? <>Arrivée {st.dateArrivee || "—"} → Départ {st.dateDepart || "—"}</>
-                      : <span style={{ color: T.amber }}>Dates non renseignées</span>}
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                    {st.hebergement && <Home size={12} color={T.blue} />}
+                    {st.montant > 0 && (
+                      <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 7px", borderRadius: 12, background: st.paye ? `${T.green}18` : `${T.amber}18`, color: st.paye ? T.green : T.amber }}>
+                        {st.paye ? "Payé" : "Non payé"} · €{st.montant.toLocaleString("fr-FR")}
+                      </span>
+                    )}
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+                <div style={{ color: T.mute, marginTop: 2, fontSize: 11.5 }}>
+                  {st.du}{st.au ? ` → ${st.au}` : ""}
+                  {st.hebergement && (st.dateArrivee || st.dateDepart) && (
+                    <> · Hôtel : arrivée {st.dateArrivee || "—"}, départ {st.dateDepart || "—"}</>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
           <div style={{ fontSize: 11.5, color: T.dim, lineHeight: 1.5 }}>
-            Stages : {stagiaire.stages.map(st => st.nom).join(", ")}
-            <br />Mettre à jour l'email/téléphone ici les corrige sur toutes ses inscriptions. Les dates d'hébergement se modifient depuis la fiche du stagiaire, dans l'onglet Stages.
+            Mettre à jour l'email/téléphone/date de naissance/nationalité ici les corrige sur toutes ses inscriptions. Les dates d'hébergement et le statut de paiement d'un stage précis se modifient depuis sa fiche, dans l'onglet Stages.
           </div>
         </div>
-        <div style={styles.modalFoot}>
-          <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
-          <button style={styles.primaryBtn} onClick={() => onSave({ email: email.trim(), telephone: telephone.trim() })}><Check size={16} /> Enregistrer</button>
+        <div style={{ ...styles.modalFoot, justifyContent: "space-between" }}>
+          {confirmDelete ? (
+            <button style={{ ...styles.ghostBtn, color: T.red, borderColor: `${T.red}55` }} onClick={onDelete}>
+              <Check size={14} /> Confirmer la suppression
+            </button>
+          ) : (
+            <button style={{ ...styles.ghostBtn, color: T.red, borderColor: `${T.red}55` }} onClick={() => setConfirmDelete(true)}>
+              <Trash2 size={14} /> Supprimer ce stagiaire
+            </button>
+          )}
+          <div style={{ display: "flex", gap: 10 }}>
+            <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
+            <button style={styles.primaryBtn} onClick={() => onSave({ email: email.trim(), telephone: telephone.trim(), dateNaissance: dateNaissance.trim(), nationalite: nationalite.trim() })}><Check size={16} /> Enregistrer</button>
+          </div>
         </div>
       </div>
     </div>
@@ -2161,6 +2244,8 @@ function StageCard({ s, onEdit, onDelete, onParticipants }) {
         <StagiaireModal
           stagiaire={parts[editingIdx]}
           stageNom={s.nom}
+          tarifStage={s.tarif || 0}
+          hebergementTarif={s.hebergementTarif || 0}
           proposeHebergement={!!s.hebergement}
           onSave={(data) => saveStagiaire(editingIdx, data)}
           onClose={() => setEditingIdx(null)}
@@ -2170,22 +2255,27 @@ function StageCard({ s, onEdit, onDelete, onParticipants }) {
   );
 }
 
-function StagiaireModal({ stagiaire, stageNom, proposeHebergement, onSave, onClose }) {
+function StagiaireModal({ stagiaire, stageNom, tarifStage, hebergementTarif, proposeHebergement, onSave, onClose }) {
   const [f, setF] = useState({
     prenom: stagiaire.prenom || "",
     nom: stagiaire.nom || "",
     classement: stagiaire.classement || "",
     age: stagiaire.age || "",
+    dateNaissance: stagiaire.dateNaissance || "",
+    nationalite: stagiaire.nationalite || "",
     objectifs: stagiaire.objectifs || "",
     hebergement: !!stagiaire.hebergement,
     dateArrivee: stagiaire.dateArrivee || "",
     dateDepart: stagiaire.dateDepart || "",
     email: stagiaire.email || "",
     telephone: stagiaire.telephone || "",
+    paye: !!stagiaire.paye,
   });
   const set = (k, v) => setF({ ...f, [k]: v });
   const canSave = (f.prenom.trim() || f.nom.trim());
   const save = () => onSave({ ...f, age: f.age ? +f.age : null });
+  const montantDu = (tarifStage || 0) + (f.hebergement ? (hebergementTarif || 0) : 0);
+  const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -2201,10 +2291,14 @@ function StagiaireModal({ stagiaire, stageNom, proposeHebergement, onSave, onClo
             <Field label="Prénom"><input style={styles.input} value={f.prenom} onChange={(e) => set("prenom", e.target.value)} /></Field>
             <Field label="Nom"><input style={styles.input} value={f.nom} onChange={(e) => set("nom", e.target.value)} /></Field>
           </div>
-          <div style={styles.grid2}>
+          <div style={styles.grid3}>
             <Field label="Classement"><input style={styles.input} value={f.classement} placeholder="15/2" onChange={(e) => set("classement", e.target.value)} /></Field>
             <Field label="Âge"><input style={styles.input} type="number" value={f.age} onChange={(e) => set("age", e.target.value)} /></Field>
+            <Field label="Date de naissance"><input style={styles.input} value={f.dateNaissance} placeholder="12/05/2011" onChange={(e) => set("dateNaissance", e.target.value)} /></Field>
           </div>
+          <Field label="Nationalité" full>
+            <input style={styles.input} value={f.nationalite} placeholder="Française" onChange={(e) => set("nationalite", e.target.value)} />
+          </Field>
           <Field label="Objectifs du stage" full>
             <textarea style={{ ...styles.textarea, minHeight: 70 }} value={f.objectifs} placeholder="Ce que le stagiaire veut travailler pendant le stage…" onChange={(e) => set("objectifs", e.target.value)} />
           </Field>
@@ -2227,6 +2321,11 @@ function StagiaireModal({ stagiaire, stageNom, proposeHebergement, onSave, onClo
               )}
             </>
           )}
+          <Field label={`Paiement — ${eur(montantDu)} dû pour ce stage`} full>
+            <button style={{ ...styles.toggle, ...(f.paye ? styles.toggleOn : {}) }} onClick={() => set("paye", !f.paye)}>
+              {f.paye ? "✓ Payé" : "Non payé"}
+            </button>
+          </Field>
         </div>
         <div style={styles.modalFoot}>
           <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
@@ -2494,7 +2593,7 @@ function JoueursView({ analyzed, onOpen, onEdit, onDelete, onAdd }) {
     if (sortBy === "age") return (a.age || 0) - (b.age || 0);
     if (sortBy === "classement") return classementRangIndex(a.classementFFT) - classementRangIndex(b.classementFFT);
     if (sortBy === "score") return scoreGlobal(b.detail) - scoreGlobal(a.detail);
-    return a.name.localeCompare(b.name);
+    return nomDeFamille(a.name).localeCompare(nomDeFamille(b.name)) || a.name.localeCompare(b.name);
   });
 
   return (
