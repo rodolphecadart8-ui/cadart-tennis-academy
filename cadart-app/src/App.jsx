@@ -540,7 +540,7 @@ async function saveDepenses(d) {
   try { await window.storage.set(DEPENSES_KEY, JSON.stringify(d)); }
   catch (e) { console.error("Sauvegarde dépenses impossible :", e); }
 }
-const DEPENSES_CATEGORIES = [
+const DEPENSES_CATEGORIES_SEED = [
   "Prestations coachs", "Cotisations familles / adhérents", "Sponsoring", "Aide apprentissage (État)",
   "Location courts / salle", "Hébergement stages", "Loyer Xavier Louis", "Assurance",
   "Charges sociales (URSSAF)", "Impôts et taxes", "Comptabilité / gestion", "Frais bancaires",
@@ -549,6 +549,17 @@ const DEPENSES_CATEGORIES = [
   "Retraite (AG2R)", "Prestataires divers", "Ligue de Provence (licences / tickets)",
   "Matériel", "Marketing / communication", "Électricité / eau", "Entretien", "Administratif", "Autre",
 ];
+/* Catégories de dépenses/recettes — éditables depuis l'onglet Tableau de bord financier */
+const CATEGORIES_KEY = "cadart:categories:v1";
+async function loadCategories() {
+  try { const r = await window.storage.get(CATEGORIES_KEY); if (r && r.value) return JSON.parse(r.value); }
+  catch (e) { /* clé absente */ }
+  return null;
+}
+async function saveCategories(c) {
+  try { await window.storage.set(CATEGORIES_KEY, JSON.stringify(c)); }
+  catch (e) { console.error("Sauvegarde catégories impossible :", e); }
+}
 /* Dépenses réelles extraites du relevé bancaire de juin 2026 — à compléter mois par mois.
    Les prestations de chaque coach sont des dépenses comme les autres (catégorie "Prestations coachs"),
    ce qui permet de les faire varier chaque mois exactement comme le reste. */
@@ -1081,6 +1092,7 @@ function CoachDashboard({ onLogout, adminEmail }) {
   const navigate = (v) => { setView(v); setProfileId(null); };
   const [stages, setStages] = useState([]);
   const [depenses, setDepenses] = useState([]);
+  const [categories, setCategories] = useState(DEPENSES_CATEGORIES_SEED);
 
   useEffect(() => {
     (async () => {
@@ -1106,6 +1118,9 @@ function CoachDashboard({ onLogout, adminEmail }) {
           setDepenses(dp);
         }
       }
+      const cats = await loadCategories();
+      if (cats === null) { setCategories(DEPENSES_CATEGORIES_SEED); saveCategories(DEPENSES_CATEGORIES_SEED); }
+      else setCategories(cats);
       setLoading(false);
     })();
   }, []);
@@ -1113,6 +1128,7 @@ function CoachDashboard({ onLogout, adminEmail }) {
   const commit = (next) => { setPlayers(next); savePlayers(next); };
   const commitStages = (next) => { setStages(next); saveStages(next); };
   const commitDepenses = (next) => { setDepenses(next); saveDepenses(next); };
+  const commitCategories = (next) => { setCategories(next); saveCategories(next); };
 
   const upsert = (player) => {
     const exists = players.some(p => p.id === player.id);
@@ -1346,7 +1362,7 @@ function CoachDashboard({ onLogout, adminEmail }) {
       )}
 
       {view === "depenses" && (
-        <DepensesView depenses={depenses} onSave={commitDepenses} players={players} stages={stages} />
+        <DepensesView depenses={depenses} onSave={commitDepenses} players={players} stages={stages} categories={categories} onSaveCategories={commitCategories} />
       )}
 
       {view === "joueurs" && (
@@ -1466,8 +1482,8 @@ function StagesView({ stages, onSave }) {
         <header style={styles.header}>
           <div>
             <button style={styles.ghostBtn} onClick={() => setSelectedWeek(null)}><ArrowLeft size={15} /> Toutes les semaines</button>
-            <div style={{ ...styles.h1, marginTop: 10 }}>Semaine {wk.week}</div>
-            <div style={styles.sub}>{wk.start} → {wk.end}</div>
+            <div style={{ ...styles.h1, marginTop: 10 }}>Semaine du {wk.start}</div>
+            <div style={styles.sub}>au {wk.end}</div>
           </div>
           <button style={styles.primaryBtn} onClick={() => setModal("new")}><Plus size={16} /> Nouveau stage</button>
         </header>
@@ -1480,7 +1496,7 @@ function StagesView({ stages, onSave }) {
         </div>
 
         {wkList.length === 0 ? (
-          <div style={styles.emptyPanel}>Aucun stage cette semaine-là. Crée-en un pour la semaine {wk.week} 🎾</div>
+          <div style={styles.emptyPanel}>Aucun stage cette semaine-là. Crée-en un pour la semaine du {wk.start} 🎾</div>
         ) : (
           <div style={styles.stagesGrid}>
             {wkList.map(s => (
@@ -1525,8 +1541,8 @@ function StagesView({ stages, onSave }) {
             <div style={{ ...styles.weekGrid, marginBottom: 22 }}>
               {g.weeks.map(w => (
                 <div key={w.key} style={styles.weekCard} onClick={() => setSelectedWeek(w.key)}>
-                  <div style={styles.weekNum}>S{w.week}</div>
-                  <div style={styles.weekRange}>{w.start} → {w.end}</div>
+                  <div style={{ ...styles.weekNum, fontSize: 13.5 }}>Semaine du {w.start}</div>
+                  <div style={styles.weekRange}>au {w.end}</div>
                   <div style={styles.weekCount}>
                     <Tent size={13} color={T.green} /> {w.stages.length} stage{w.stages.length > 1 ? "s" : ""}
                   </div>
@@ -1704,7 +1720,7 @@ function AIAssistantView({ players, stages, depenses }) {
 /* ============================================================
    DÉPENSES — vue et modale
    ============================================================ */
-function DepensesView({ depenses, onSave, players, stages }) {
+function DepensesView({ depenses, onSave, players, stages, categories, onSaveCategories }) {
   const list = depenses || [];
   const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
   // Montant signé : positif = recette, négatif = dépense (comme dans un relevé bancaire)
@@ -1758,6 +1774,7 @@ function DepensesView({ depenses, onSave, players, stages }) {
   const coachGrandTotal = moisListe.reduce((a, m) => a + coachMoisTotal(m), 0);
 
   const [cellModal, setCellModal] = useState(null); // { categorie, mois, libelle }
+  const [showCategories, setShowCategories] = useState(false);
   const [modal, setModal] = useState(null);
   const fileInputRef = useRef(null);
   const [importMsg, setImportMsg] = useState(null);
@@ -1828,7 +1845,8 @@ function DepensesView({ depenses, onSave, players, stages }) {
           <button style={styles.ghostBtn} onClick={() => generateBilanAnnuelPdf(list, stages, players || [])} title="Générer un bilan pour le comptable">
             <FileDown size={15} /> Bilan annuel (PDF)
           </button>
-          <button style={styles.primaryBtn} onClick={() => setModal({ id: "dep" + Date.now(), mois: dernierMoisAvecDonnee, categorie: DEPENSES_CATEGORIES[0], libelle: "", montant: 0 })}><Plus size={16} /> Nouvelle dépense</button>
+          <button style={styles.ghostBtn} onClick={() => setShowCategories(true)}><Pencil size={15} /> Gérer les catégories</button>
+          <button style={styles.primaryBtn} onClick={() => setModal({ id: "dep" + Date.now(), mois: dernierMoisAvecDonnee, categorie: categories[0], libelle: "", montant: 0 })}><Plus size={16} /> Nouvelle dépense</button>
         </div>
       </header>
 
@@ -1937,7 +1955,11 @@ function DepensesView({ depenses, onSave, players, stages }) {
       )}
 
       {modal && (
-        <DepenseModal initial={modal} isNew={!list.some(x => x.id === modal.id)} onSave={upsert} onClose={() => setModal(null)} />
+        <DepenseModal initial={modal} isNew={!list.some(x => x.id === modal.id)} categories={categories} onSave={upsert} onClose={() => setModal(null)} />
+      )}
+
+      {showCategories && (
+        <CategoriesModal categories={categories} onSave={onSaveCategories} onClose={() => setShowCategories(false)} />
       )}
 
       <footer style={styles.footer}>CADART Tennis Academy · Tableau de bord financier — enregistré automatiquement.</footer>
@@ -1983,10 +2005,84 @@ function CellEntriesModal({ categorie, mois, libelle, entries, eur, onEdit, onDe
   );
 }
 
-function DepenseModal({ initial, isNew, onSave, onClose }) {
+function CategoriesModal({ categories, onSave, onClose }) {
+  const [list, setList] = useState([...categories]);
+  const [newCat, setNewCat] = useState("");
+  const [editingIdx, setEditingIdx] = useState(null);
+  const [editValue, setEditValue] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
+  const add = () => {
+    const v = newCat.trim();
+    if (!v || list.includes(v)) return;
+    setList([...list, v]);
+    setNewCat("");
+  };
+  const startEdit = (i) => { setEditingIdx(i); setEditValue(list[i]); };
+  const confirmEdit = () => {
+    const v = editValue.trim();
+    if (!v) return;
+    setList(list.map((c, i) => (i === editingIdx ? v : c)));
+    setEditingIdx(null);
+  };
+  const del = (i) => { setList(list.filter((_, k) => k !== i)); setConfirmDelete(null); };
+
+  return (
+    <div style={styles.overlay} onClick={onClose}>
+      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHead}>
+          <div>
+            <span style={styles.modalTitle}>Gérer les catégories</span>
+            <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{list.length} catégorie{list.length > 1 ? "s" : ""}</div>
+          </div>
+          <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div style={styles.modalBody}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            <input style={styles.input} placeholder="Nouvelle catégorie…" value={newCat} onChange={(e) => setNewCat(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} />
+            <button style={styles.primaryBtn} onClick={add}><Plus size={15} /></button>
+          </div>
+          {list.map((cat, i) => (
+            <div key={i} style={styles.row}>
+              {editingIdx === i ? (
+                <>
+                  <input style={{ ...styles.input, flex: 1 }} value={editValue} autoFocus onChange={(e) => setEditValue(e.target.value)} onKeyDown={(e) => e.key === "Enter" && confirmEdit()} />
+                  <button style={styles.iconBtn} onClick={confirmEdit}><Check size={13} /></button>
+                  <button style={styles.iconBtn} onClick={() => setEditingIdx(null)}><X size={13} /></button>
+                </>
+              ) : (
+                <>
+                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{cat}</span>
+                  {confirmDelete === i ? (
+                    <button style={{ ...styles.iconBtn, color: T.red, borderColor: `${T.red}55` }} onClick={() => del(i)}><Check size={13} /></button>
+                  ) : (
+                    <>
+                      <button style={styles.iconBtn} onClick={() => startEdit(i)}><Pencil size={13} /></button>
+                      <button style={styles.iconBtn} onClick={() => setConfirmDelete(i)}><Trash2 size={13} /></button>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          ))}
+          <div style={{ fontSize: 11.5, color: T.dim, marginTop: 10, lineHeight: 1.5 }}>
+            Supprimer une catégorie ne touche pas aux dépenses déjà enregistrées avec — elle disparaît juste de la liste proposée pour les nouvelles lignes.
+          </div>
+        </div>
+        <div style={styles.modalFoot}>
+          <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
+          <button style={styles.primaryBtn} onClick={() => { onSave(list); onClose(); }}><Check size={16} /> Enregistrer</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DepenseModal({ initial, isNew, categories, onSave, onClose }) {
+  const cats = categories && categories.length ? categories : DEPENSES_CATEGORIES_SEED;
   const RECETTE_PAR_DEFAUT = ["Cotisations familles / adhérents", "Sponsoring", "Aide apprentissage (État)"];
   const [f, setF] = useState(initial || {
-    id: "dep" + Date.now(), mois: moisLabelNow(), categorie: DEPENSES_CATEGORIES[0], libelle: "", montant: 0,
+    id: "dep" + Date.now(), mois: moisLabelNow(), categorie: cats[0], libelle: "", montant: 0,
   });
   const [type, setType] = useState(() => {
     if (!isNew) return (initial && initial.montant || 0) >= 0 ? "recette" : "depense";
@@ -2013,7 +2109,7 @@ function DepenseModal({ initial, isNew, onSave, onClose }) {
               <input style={styles.input} value={f.mois || ""} placeholder="Juillet 2026" onChange={(e) => set("mois", e.target.value)} />
             </Field>
             <Field label="Catégorie">
-              <Select value={f.categorie} onChange={setCategorie} options={DEPENSES_CATEGORIES.map(c => [c, c])} />
+              <Select value={f.categorie} onChange={setCategorie} options={cats.map(c => [c, c])} />
             </Field>
           </div>
           <Field label={f.categorie === "Prestations coachs" ? "Nom du coach" : "Libellé"} full>
