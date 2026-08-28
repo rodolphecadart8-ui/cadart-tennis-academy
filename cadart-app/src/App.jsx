@@ -1710,9 +1710,25 @@ function DepensesView({ depenses, onSave, players, stages }) {
   // Montant signé : positif = recette, négatif = dépense (comme dans un relevé bancaire)
   const eurSigne = (n) => (n === 0 ? "—" : `${n >= 0 ? "+" : "-"}€${Math.abs(Math.round(n)).toLocaleString("fr-FR")}`);
 
+  // Année affichée : celle la plus présente dans les données, sinon l'année en cours
+  const anneeReference = useMemo(() => {
+    const annees = list.map(d => { const p = d.mois && d.mois.trim().split(/\s+/); return p && p.length === 2 ? parseInt(p[1], 10) : null; }).filter(Boolean);
+    if (annees.length === 0) return new Date().getFullYear();
+    const counts = {};
+    annees.forEach(y => { counts[y] = (counts[y] || 0) + 1; });
+    return +Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+  }, [list]);
+
+  // Les 12 mois de l'année, toujours affichés (même sans donnée pour l'instant)
   const moisListe = useMemo(() => {
+    return MOIS_NOMS.map(nom => `${nom.charAt(0).toUpperCase()}${nom.slice(1)} ${anneeReference}`);
+  }, [anneeReference]);
+
+  // Dernier mois pour lequel on a déjà de vraies données (pour pré-remplir les nouveaux mouvements)
+  const dernierMoisAvecDonnee = useMemo(() => {
     const uniq = [...new Set(list.map(d => d.mois).filter(Boolean))];
-    return uniq.sort((a, b) => moisSortKey(a) - moisSortKey(b));
+    if (uniq.length === 0) return moisLabelNow();
+    return uniq.sort((a, b) => moisSortKey(a) - moisSortKey(b)).pop();
   }, [list]);
 
   // Table principale : catégories × mois ("Prestations coachs" en une seule ligne agrégée, tout en bas)
@@ -1798,7 +1814,7 @@ function DepensesView({ depenses, onSave, players, stages }) {
     <main style={styles.main}>
       <header style={styles.header}>
         <div>
-          <div style={styles.h1}>Dépenses</div>
+          <div style={styles.h1}>Tableau de bord financier</div>
           <div style={styles.sub}>Synthèse par catégorie et par mois — montants signés (+ recette, − dépense)</div>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -1812,7 +1828,7 @@ function DepensesView({ depenses, onSave, players, stages }) {
           <button style={styles.ghostBtn} onClick={() => generateBilanAnnuelPdf(list, stages, players || [])} title="Générer un bilan pour le comptable">
             <FileDown size={15} /> Bilan annuel (PDF)
           </button>
-          <button style={styles.primaryBtn} onClick={() => setModal({ id: "dep" + Date.now(), mois: moisListe[moisListe.length - 1] || moisLabelNow(), categorie: DEPENSES_CATEGORIES[0], libelle: "", montant: 0 })}><Plus size={16} /> Nouvelle dépense</button>
+          <button style={styles.primaryBtn} onClick={() => setModal({ id: "dep" + Date.now(), mois: dernierMoisAvecDonnee, categorie: DEPENSES_CATEGORIES[0], libelle: "", montant: 0 })}><Plus size={16} /> Nouvelle dépense</button>
         </div>
       </header>
 
@@ -1822,7 +1838,7 @@ function DepensesView({ depenses, onSave, players, stages }) {
         </div>
       )}
 
-      {moisListe.length === 0 ? (
+      {list.length === 0 ? (
         <div style={styles.emptyPanel}>Aucune dépense enregistrée pour l'instant. Clique sur « Importer CSV » ou « Nouvelle dépense » pour commencer.</div>
       ) : (
         <>
@@ -1924,7 +1940,7 @@ function DepensesView({ depenses, onSave, players, stages }) {
         <DepenseModal initial={modal} isNew={!list.some(x => x.id === modal.id)} onSave={upsert} onClose={() => setModal(null)} />
       )}
 
-      <footer style={styles.footer}>CADART Tennis Academy · Dépenses — enregistré automatiquement.</footer>
+      <footer style={styles.footer}>CADART Tennis Academy · Tableau de bord financier — enregistré automatiquement.</footer>
     </main>
   );
 }
@@ -2920,7 +2936,7 @@ function Sidebar({ active = "dashboard", onNavigate, onLogout, adminEmail }) {
     { key: "joueurs", icon: UserRound, label: "Joueurs", nav: true },
     { key: "stages", icon: Tent, label: "Stages", nav: true },
     { key: "stagiaires", icon: UserPlus, label: "Stagiaires", nav: true },
-    { key: "depenses", icon: Wallet, label: "Dépenses", nav: true },
+    { key: "depenses", icon: Wallet, label: "Tableau de bord financier", nav: true },
     { key: "ia", icon: Sparkles, label: "Assistant IA", nav: true },
     { key: "tests", icon: FlaskRound, label: "Tests & analyses", soon: true },
     { key: "alertes", icon: Bell, label: "Alertes", soon: true },
