@@ -1731,22 +1731,22 @@ function DepensesView({ depenses, onSave, players, stages }) {
     return uniq.sort((a, b) => moisSortKey(a) - moisSortKey(b)).pop();
   }, [list]);
 
-  // Table principale : catégories × mois ("Prestations coachs" en une seule ligne agrégée, tout en bas)
-  const categories = useMemo(() => {
-    const cats = [...new Set(list.map(d => d.categorie).filter(Boolean))];
-    return cats.sort((a, b) => {
-      if (a === "Prestations coachs") return 1;
-      if (b === "Prestations coachs") return -1;
-      return a.localeCompare(b);
-    });
+  // Une seule table, comme l'Excel d'origine : les catégories de recettes en tête,
+  // puis toutes les autres (dont "Prestations coachs") par ordre alphabétique.
+  const CATEGORIES_RECETTES = ["Aide apprentissage (État)", "Cotisations familles / adhérents", "Sponsoring"];
+  const categoriesOrdonnees = useMemo(() => {
+    const toutes = [...new Set(list.map(d => d.categorie).filter(Boolean))];
+    const recettes = CATEGORIES_RECETTES.filter(c => toutes.includes(c));
+    const autres = toutes.filter(c => !CATEGORIES_RECETTES.includes(c)).sort((a, b) => a.localeCompare(b));
+    return [...recettes, ...autres];
   }, [list]);
 
   const cellEntries = (categorie, mois, libelle) =>
     list.filter(d => d.categorie === categorie && d.mois === mois && (libelle === undefined || d.libelle === libelle));
   const cellValue = (categorie, mois, libelle) => cellEntries(categorie, mois, libelle).reduce((a, d) => a + (d.montant || 0), 0);
   const catTotal = (cat) => moisListe.reduce((a, m) => a + cellValue(cat, m), 0);
-  const moisTotal = (mois) => categories.reduce((a, c) => a + cellValue(c, mois), 0);
-  const grandTotal = moisListe.reduce((a, m) => a + moisTotal(m), 0);
+  const moisResultatNet = (mois) => categoriesOrdonnees.reduce((a, c) => a + cellValue(c, mois), 0);
+  const grandResultatNet = moisListe.reduce((a, m) => a + moisResultatNet(m), 0);
 
   // Table secondaire : coachs × mois (uniquement la catégorie "Prestations coachs")
   const coachs = useMemo(() => {
@@ -1804,11 +1804,11 @@ function DepensesView({ depenses, onSave, players, stages }) {
   };
 
   const cellStyle = (v, isTotal) => ({
-    padding: "8px 10px", textAlign: "right", fontSize: 12, fontWeight: isTotal ? 800 : 600, whiteSpace: "nowrap",
+    padding: "6px 9px", textAlign: "right", fontSize: 10.5, fontWeight: isTotal ? 700 : 500, whiteSpace: "nowrap",
     color: v === 0 ? T.dim : v > 0 ? T.green : T.red, cursor: "pointer", borderRadius: 6,
   });
-  const rowLabelStyle = { padding: "8px 10px", fontSize: 12.5, fontWeight: 600, color: T.text, whiteSpace: "nowrap", position: "sticky", left: 0, background: T.card, zIndex: 1 };
-  const headStyle = { padding: "8px 10px", textAlign: "right", fontSize: 10.5, fontWeight: 700, color: T.dim, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap" };
+  const rowLabelStyle = { padding: "6px 9px", fontSize: 11, fontWeight: 600, color: T.text, whiteSpace: "nowrap", position: "sticky", left: 0, background: T.card, zIndex: 1 };
+  const headStyle = { padding: "6px 9px", textAlign: "right", fontSize: 9.5, fontWeight: 700, color: T.dim, textTransform: "uppercase", letterSpacing: 0.3, whiteSpace: "nowrap" };
 
   return (
     <main style={styles.main}>
@@ -1853,7 +1853,7 @@ function DepensesView({ depenses, onSave, players, stages }) {
                 </tr>
               </thead>
               <tbody>
-                {categories.map(cat => (
+                {categoriesOrdonnees.map(cat => (
                   <tr key={cat} style={{ borderBottom: `1px solid ${T.border}` }}>
                     <td style={rowLabelStyle}>{cat}</td>
                     {moisListe.map(m => {
@@ -1867,10 +1867,10 @@ function DepensesView({ depenses, onSave, players, stages }) {
                     <td style={cellStyle(catTotal(cat), true)}>{eurSigne(catTotal(cat))}</td>
                   </tr>
                 ))}
-                <tr style={{ borderTop: `2px solid ${T.border2}` }}>
-                  <td style={{ ...rowLabelStyle, fontWeight: 800 }}>RÉSULTAT NET</td>
-                  {moisListe.map(m => <td key={m} style={cellStyle(moisTotal(m), true)}>{eurSigne(moisTotal(m))}</td>)}
-                  <td style={cellStyle(grandTotal, true)}>{eurSigne(grandTotal)}</td>
+                <tr style={{ background: `${T.amber}14` }}>
+                  <td style={{ ...rowLabelStyle, fontWeight: 800, background: `${T.amber}14` }}>RÉSULTAT NET (Recettes − Dépenses)</td>
+                  {moisListe.map(m => <td key={m} style={{ ...cellStyle(moisResultatNet(m), true), background: `${T.amber}14` }}>{eurSigne(moisResultatNet(m))}</td>)}
+                  <td style={{ ...cellStyle(grandResultatNet, true), background: `${T.amber}14` }}>{eurSigne(grandResultatNet)}</td>
                 </tr>
               </tbody>
             </table>
