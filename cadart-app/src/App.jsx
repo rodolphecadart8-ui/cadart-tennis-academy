@@ -5823,5 +5823,3 @@ const styles = {
   toggleOn: { background: T.greenGlow, borderColor: `${T.green}66`, color: T.green },
   modalFoot: { display: "flex", justifyContent: "flex-end", gap: 10, padding: "16px 20px", borderTop: `1px solid ${T.border}`, position: "sticky", bottom: 0, background: T.bg2 },
 };
-
-    
