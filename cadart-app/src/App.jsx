@@ -1197,7 +1197,18 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
     (async () => {
       const stored = await loadPlayers();
       if (stored === null) { setPlayers(SEED); savePlayers(SEED); }
-      else setPlayers(stored);
+      else {
+        // S'assure que tout joueur existant (importé par CSV, créé à la main…) a bien un code
+        // d'accès — auparavant seuls les joueurs de démo en recevaient un automatiquement.
+        let manque = false;
+        const complets = stored.map(p => {
+          if (p.codeAcces) return p;
+          manque = true;
+          return { ...p, codeAcces: codeFromId(p.id) };
+        });
+        setPlayers(complets);
+        if (manque) savePlayers(complets);
+      }
       const st = await loadStages();
       if (st === null) { setStages(STAGES_SEED); saveStages(STAGES_SEED); }
       else setStages(st);
@@ -1275,13 +1286,15 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
             nbMisAJour++;
           } else {
             // Pas de correspondance : nouveau joueur créé (comme avant).
+            const newId = "imp-" + Date.now() + "-" + i;
             nextPlayers.push({
-              id: "imp-" + Date.now() + "-" + i,
+              id: newId,
               name: nomCsv,
               flag: "🎾",
               sex: (r.sexe || "M").trim().toUpperCase().startsWith("F") ? "F" : "M",
               age: parseInt(r.age, 10) || 14,
               form: 80, utr: r.utr || "", itf: "", classementFFT: r.classement_francais || "", tarifMensuel: parseFloat(r.tarif) || 0,
+              codeAcces: codeFromId(newId),
               sleep: 7, hrv: 65, fatigue: "low", stress: "low", load: "optimale",
               serviceTrend: 0, testToday: false,
               objectifsMois: [], exercices: [],
@@ -3544,13 +3557,14 @@ function PlanningItem({ p, last }) {
 /* ---------- Modale ajout / édition ---------- */
 function PlayerModal({ initial, onSave, onClose }) {
   const [f, setF] = useState(() => {
+    const newId = "p" + Date.now() + Math.floor(Math.random() * 999);
     const base = initial || {
-      id: "p" + Date.now() + Math.floor(Math.random() * 999),
+      id: newId,
       name: "", flag: "🎾", sex: "M", age: 16, form: 85,
       sleep: 8, hrv: 70, fatigue: "low", stress: "low", load: "optimale",
       serviceTrend: 0, testToday: false,
       session: { time: "", type: "", court: "", status: "entrainement", coach: "Rodolphe", coachPhone: "" },
-      utr: "", itf: "", classementFFT: "", tarifMensuel: 0,
+      utr: "", itf: "", classementFFT: "", tarifMensuel: 0, codeAcces: codeFromId(newId),
       objectifsMois: ["", ""], exercices: [],
       focus: { axis: "", note: "" },
     };
@@ -3559,6 +3573,7 @@ function PlayerModal({ initial, onSave, onClose }) {
       focus: base.focus || { axis: "", note: "" },
       exercices: base.exercices || [],
       objectifsMois: base.objectifsMois || (base.objectifMois ? [base.objectifMois, ""] : ["", ""]),
+      codeAcces: base.codeAcces || codeFromId(base.id),
     };
   });
   const set = (k, v) => setF({ ...f, [k]: v });
@@ -3634,9 +3649,15 @@ function PlayerModal({ initial, onSave, onClose }) {
           </div>
           {utrError && <div style={{ color: T.red, fontSize: 11.5, marginTop: -8, marginBottom: 10 }}>{utrError}</div>}
 
-          <div style={styles.grid3}>
+          <div style={styles.grid2}>
             <Field label="Tarif mensuel réel (€)">
               <input style={styles.input} type="number" value={f.tarifMensuel || 0} placeholder="1200" onChange={(e) => set("tarifMensuel", +e.target.value)} />
+            </Field>
+            <Field label="Code d'accès (espace joueur)">
+              <div style={{ display: "flex", alignItems: "center", gap: 8, height: 38 }}>
+                <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: 2, color: T.green, fontFamily: "monospace" }}>{f.codeAcces || "—"}</span>
+                <span style={{ fontSize: 10.5, color: T.dim }}>à donner au joueur / parent pour se connecter</span>
+              </div>
             </Field>
           </div>
 
