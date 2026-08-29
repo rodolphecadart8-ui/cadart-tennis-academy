@@ -546,6 +546,19 @@ function genStagesRecurrents() {
 STAGES_SEED.push(...genStagesRecurrents());
 
 /* ---------- Dépenses de l'académie (organisées mois par mois) ---------- */
+/* ---------- Tournois (planning partagé, tous joueurs confondus) ---------- */
+const TOURNOIS_KEY = "cadart:tournois:v1";
+async function loadTournois() {
+  try { const r = await window.storage.get(TOURNOIS_KEY); if (r && r.value) return JSON.parse(r.value); }
+  catch (e) { /* clé absente */ }
+  return null;
+}
+async function saveTournois(t) {
+  try { await window.storage.set(TOURNOIS_KEY, JSON.stringify(t)); }
+  catch (e) { console.error("Sauvegarde tournois impossible :", e); }
+}
+const TOURNOIS_SEED = [];
+
 const DEPENSES_KEY = "cadart:depenses:v3";
 const DEPENSES_MIGRATION_KEY = "cadart:depenses:migrated_signes_v1";
 async function loadDepenses() {
@@ -932,7 +945,95 @@ class ErrorBoundary extends React.Component {
 }
 
 export default function App() {
+  // Mode TV : ?tv=1 dans l'URL affiche le planning du jour en plein écran, sans connexion.
+  // Pratique pour un navigateur de salon/TV laissé allumé à l'académie — pas besoin de se logger chaque jour.
+  const isTV = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("tv") === "1";
+  if (isTV) return <ErrorBoundary><TVPlanningView /></ErrorBoundary>;
   return <ErrorBoundary><AuthGate /></ErrorBoundary>;
+}
+
+function TVPlanningView() {
+  const [players, setPlayers] = useState([]);
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    const fetchData = async () => { const stored = await loadPlayers(); setPlayers(stored || []); };
+    fetchData();
+    const dataTimer = setInterval(fetchData, 60000); // rafraîchit les données toutes les minutes
+    const clockTimer = setInterval(() => setNow(new Date()), 1000); // horloge en direct
+    return () => { clearInterval(dataTimer); clearInterval(clockTimer); };
+  }, []);
+
+  const facilityGroups = computeFacilityGroups(players);
+  const heure = now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  const dateLabel = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg, color: T.text, padding: "32px 40px", fontFamily: FONT }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 32 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <span style={styles.logoMark}>
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+              <path d="M20 6.5A9 9 0 1 0 20 17.5" stroke={T.green} strokeWidth="2.6" strokeLinecap="round" />
+              <path d="M15 12h6M18 9l3 3-3 3" stroke={T.green} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <div>
+            <div style={{ fontSize: 26, fontWeight: 900, letterSpacing: 0.5 }}>CADART TENNIS ACADEMY</div>
+            <div style={{ fontSize: 17, color: T.mute, textTransform: "capitalize" }}>{dateLabel}</div>
+          </div>
+        </div>
+        <div style={{ fontSize: 44, fontWeight: 900, color: T.green, fontVariantNumeric: "tabular-nums" }}>{heure}</div>
+      </div>
+
+      <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: 1, textTransform: "uppercase", color: T.dim, marginBottom: 14 }}>Courts</div>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${facilityGroups.courts.length || 1}, 1fr)`, gap: 18, marginBottom: 36 }}>
+        {facilityGroups.courts.map(g => <TVCourtCard key={g.court} group={g} />)}
+      </div>
+
+      <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: 1, textTransform: "uppercase", color: T.dim, marginBottom: 14 }}>Salles physiques</div>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${facilityGroups.salles.length || 1}, 1fr)`, gap: 18 }}>
+        {facilityGroups.salles.map(g => <TVCourtCard key={g.court} group={g} kind="salle" />)}
+      </div>
+    </div>
+  );
+}
+
+function TVCourtCard({ group, kind }) {
+  const empty = group.players.length === 0;
+  const slotsMap = {};
+  group.players.forEach(p => {
+    const key = (p.session && p.session.time) || "—";
+    if (!slotsMap[key]) slotsMap[key] = [];
+    slotsMap[key].push(p);
+  });
+  const slots = Object.entries(slotsMap).sort((a, b) => a[0].localeCompare(b[0]));
+  return (
+    <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, padding: 18, minHeight: 140 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        {kind === "salle" ? <Dumbbell size={20} color={T.green} /> : <MapPin size={20} color={T.green} />}
+        <span style={{ fontSize: 19, fontWeight: 800 }}>{group.court}</span>
+      </div>
+      {empty ? (
+        <div style={{ fontSize: 15, color: T.dim, fontStyle: "italic" }}>{kind === "salle" ? "Salle libre" : "Court libre"}</div>
+      ) : slots.map(([time, ps], si) => (
+        <div key={time} style={{ marginTop: si > 0 ? 14 : 0, paddingTop: si > 0 ? 14 : 0, borderTop: si > 0 ? `1px solid ${T.border2}` : "none" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <Clock size={15} color={T.green} />
+            <span style={{ fontSize: 17, fontWeight: 800 }}>{time}{ps[0].session && ps[0].session.end ? ` – ${ps[0].session.end}` : ""}</span>
+            {ps[0].session && ps[0].session.type && <span style={{ fontSize: 13, color: T.mute }}>· {ps[0].session.type}</span>}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {ps.map(p => (
+              <span key={p.id} style={{ fontSize: 16, fontWeight: 700, padding: "5px 12px", borderRadius: 10, background: T.bg2 }}>
+                {p.flag} {p.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 const SESSION_KEY = "cadart:session:v1";
@@ -1192,6 +1293,7 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
   const [stages, setStages] = useState([]);
   const [depenses, setDepenses] = useState([]);
   const [categories, setCategories] = useState(DEPENSES_CATEGORIES_SEED);
+  const [tournois, setTournois] = useState([]);
 
   useEffect(() => {
     (async () => {
@@ -1231,6 +1333,9 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
       const cats = await loadCategories();
       if (cats === null) { setCategories(DEPENSES_CATEGORIES_SEED); saveCategories(DEPENSES_CATEGORIES_SEED); }
       else setCategories(cats);
+      const tr = await loadTournois();
+      if (tr === null) { setTournois(TOURNOIS_SEED); saveTournois(TOURNOIS_SEED); }
+      else setTournois(tr);
       setLoading(false);
     })();
   }, []);
@@ -1239,6 +1344,7 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
   const commitStages = (next) => { setStages(next); saveStages(next); };
   const commitDepenses = (next) => { setDepenses(next); saveDepenses(next); };
   const commitCategories = (next) => { setCategories(next); saveCategories(next); };
+  const commitTournois = (next) => { setTournois(next); saveTournois(next); };
 
   const upsert = (player) => {
     const exists = players.some(p => p.id === player.id);
@@ -1490,6 +1596,10 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
 
       {view === "stagiaires" && (
         <StagiairesView stages={stages} onSaveStages={commitStages} role={role} />
+      )}
+
+      {view === "tournois" && (
+        <TournoisView tournois={tournois} onSave={commitTournois} players={players} />
       )}
 
       {view === "depenses" && role === "admin" && (
@@ -2318,6 +2428,175 @@ function agregerStagiaires(stages) {
   return result.sort((a, b) => (a.nom || "").localeCompare(b.nom || "") || (a.prenom || "").localeCompare(b.prenom || ""));
 }
 
+/* ============================================================
+   TOURNOIS — planning partagé, tous joueurs confondus
+   ============================================================ */
+function TournoisView({ tournois, onSave, players }) {
+  const [modal, setModal] = useState(null); // null | "new" | tournoi object
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [filtre, setFiltre] = useState("tous"); // "tous" | "avenir" | "passes"
+
+  const upsert = (t) => {
+    const ex = tournois.some(x => x.id === t.id);
+    onSave(ex ? tournois.map(x => (x.id === t.id ? t : x)) : [...tournois, t]);
+    setModal(null);
+  };
+  const remove = (id) => { onSave(tournois.filter(x => x.id !== id)); setConfirmDelete(null); };
+
+  const aujourdHui = new Date(); aujourdHui.setHours(0, 0, 0, 0);
+  const sorted = [...tournois].sort((a, b) => {
+    const da = parseFRDate(a.dateDebut); const db = parseFRDate(b.dateDebut);
+    return (da ? da.getTime() : 0) - (db ? db.getTime() : 0);
+  });
+  const list = sorted.filter(t => {
+    if (filtre === "tous") return true;
+    const d = parseFRDate(t.dateDebut);
+    if (!d) return true;
+    return filtre === "avenir" ? d >= aujourdHui : d < aujourdHui;
+  });
+
+  return (
+    <main style={styles.main}>
+      <header style={styles.header}>
+        <div>
+          <div style={styles.h1}>Tournois</div>
+          <div style={styles.sub}>Planning partagé — qui joue quoi, et quand</div>
+        </div>
+        <button style={styles.primaryBtn} onClick={() => setModal("new")}><Plus size={16} /> Nouveau tournoi</button>
+      </header>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        {[["tous", "Tous"], ["avenir", "À venir"], ["passes", "Passés"]].map(([k, label]) => (
+          <button
+            key={k} onClick={() => setFiltre(k)}
+            style={{
+              padding: "7px 14px", borderRadius: 20, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+              border: `1px solid ${filtre === k ? T.green : T.border2}`,
+              background: filtre === k ? T.greenGlow : "transparent",
+              color: filtre === k ? T.green : T.mute,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {list.length === 0 ? (
+        <div style={styles.emptyPanel}>Aucun tournoi {filtre === "avenir" ? "à venir" : filtre === "passes" ? "passé" : "enregistré"} pour l'instant.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {list.map(t => {
+            const d = parseFRDate(t.dateDebut);
+            const passe = d && d < aujourdHui;
+            return (
+              <section key={t.id} style={{ ...styles.panel, padding: 16, opacity: passe ? 0.7 : 1 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 15.5, fontWeight: 800 }}>{t.nom}</div>
+                    <div style={{ fontSize: 12.5, color: T.mute, marginTop: 3 }}>
+                      {t.dateDebut}{t.dateFin && t.dateFin !== t.dateDebut ? ` → ${t.dateFin}` : ""}{t.lieu ? ` · ${t.lieu}` : ""}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    {confirmDelete === t.id ? (
+                      <button style={{ ...styles.iconBtn, color: T.red, borderColor: `${T.red}55` }} onClick={() => remove(t.id)}><Check size={13} /></button>
+                    ) : (
+                      <>
+                        <button style={styles.iconBtn} onClick={() => setModal(t)}><Pencil size={13} /></button>
+                        <button style={styles.iconBtn} onClick={() => setConfirmDelete(t.id)}><Trash2 size={13} /></button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
+                  {(t.participants || []).length === 0 ? (
+                    <span style={{ fontSize: 12, color: T.dim }}>Aucun joueur inscrit</span>
+                  ) : (t.participants || []).map(pid => {
+                    const p = players.find(pl => pl.id === pid);
+                    if (!p) return null;
+                    return (
+                      <span key={pid} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 20, background: T.bg2, border: `1px solid ${T.border2}` }}>
+                        {p.flag} {p.name}
+                      </span>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
+
+      {modal && (
+        <TournoiModal
+          initial={modal === "new" ? null : modal}
+          players={players}
+          onSave={upsert}
+          onClose={() => setModal(null)}
+        />
+      )}
+
+      <footer style={styles.footer}>CADART Tennis Academy · Tournois — enregistré automatiquement.</footer>
+    </main>
+  );
+}
+
+function TournoiModal({ initial, players, onSave, onClose }) {
+  const [f, setF] = useState(initial || { id: "trn" + Date.now(), nom: "", lieu: "", dateDebut: "", dateFin: "", participants: [] });
+  const [q, setQ] = useState("");
+  const set = (k, v) => setF({ ...f, [k]: v });
+  const toggle = (pid) => {
+    const has = f.participants.includes(pid);
+    set("participants", has ? f.participants.filter(x => x !== pid) : [...f.participants, pid]);
+  };
+  const canSave = f.nom.trim().length > 0 && f.dateDebut.trim().length > 0;
+  const filtered = q.trim() ? players.filter(p => p.name.toLowerCase().includes(q.trim().toLowerCase())) : players;
+
+  return (
+    <div style={styles.overlay} onClick={onClose}>
+      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHead}>
+          <span style={styles.modalTitle}>{initial ? "Modifier le tournoi" : "Nouveau tournoi"}</span>
+          <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div style={styles.modalBody}>
+          <Field label="Nom du tournoi" full>
+            <input style={styles.input} value={f.nom} placeholder="Open régional Aix" onChange={(e) => set("nom", e.target.value)} />
+          </Field>
+          <div style={styles.grid3}>
+            <Field label="Date de début"><input style={styles.input} value={f.dateDebut} placeholder="12/09/2026" onChange={(e) => set("dateDebut", e.target.value)} /></Field>
+            <Field label="Date de fin"><input style={styles.input} value={f.dateFin} placeholder="14/09/2026" onChange={(e) => set("dateFin", e.target.value)} /></Field>
+            <Field label="Lieu"><input style={styles.input} value={f.lieu} placeholder="Country Club Aixois" onChange={(e) => set("lieu", e.target.value)} /></Field>
+          </div>
+
+          <div style={{ ...styles.sectionLabel, marginTop: 4 }}>Joueurs participants ({f.participants.length})</div>
+          <input style={{ ...styles.input, marginBottom: 8 }} placeholder="Rechercher un joueur…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <div style={{ maxHeight: 240, overflowY: "auto", border: `1px solid ${T.border}`, borderRadius: 10 }}>
+            {filtered.length === 0 ? (
+              <div style={styles.miniEmpty}>Aucun joueur trouvé.</div>
+            ) : filtered.map(p => {
+              const checked = f.participants.includes(p.id);
+              return (
+                <div
+                  key={p.id} onClick={() => toggle(p.id)}
+                  style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", cursor: "pointer", borderBottom: `1px solid ${T.border}`, background: checked ? T.greenGlow : "transparent" }}
+                >
+                  <input type="checkbox" checked={checked} onChange={() => {}} style={{ width: 15, height: 15, flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{p.flag} {p.name}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div style={styles.modalFoot}>
+          <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
+          <button style={{ ...styles.primaryBtn, opacity: canSave ? 1 : 0.5, cursor: canSave ? "pointer" : "not-allowed" }} onClick={() => canSave && onSave(f)}><Check size={16} /> Enregistrer</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StagiairesView({ stages, onSaveStages, role }) {
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState(() => new Set());
@@ -2951,21 +3230,22 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
   const enProgression = players.filter(p => (p.detail && p.detail.indiceDelta > 0) || p.serviceTrend >= 8).length;
   const vitrine = [...players].sort((a, b) => (b.serviceTrend || 0) - (a.serviceTrend || 0)).filter(p => (p.serviceTrend || 0) > 0).slice(0, 3);
 
-  // Santé business — chiffres réels du dernier mois renseigné dans l'onglet Dépenses
+  // Santé business — chiffres réels du dernier mois renseigné dans l'onglet Tableau de bord financier
   const moisDisponibles = [...new Set((depenses || []).map(d => d.mois).filter(Boolean))].sort((a, b) => moisSortKey(a) - moisSortKey(b));
   const MOIS_BUSINESS = moisDisponibles[moisDisponibles.length - 1] || moisLabelNow();
   const revenuJoueurs = players.reduce((a, p) => a + (p.tarifMensuel || 0), 0);
   const playersSansTarif = players.filter(p => !p.tarifMensuel || p.tarifMensuel <= 0).length;
   const revenuStages = caStagesMois(stages, MOIS_BUSINESS);
-  const caMois = revenuJoueurs + revenuStages;
   const depensesMois = (depenses || []).filter(d => d.mois === MOIS_BUSINESS);
-  const prestationsMois = depensesMois.filter(d => d.categorie === "Prestations coachs").reduce((a, d) => a + (d.montant || 0), 0);
-  const autresMois = depensesMois.filter(d => d.categorie !== "Prestations coachs").reduce((a, d) => a + (d.montant || 0), 0);
-  const marge = caMois - prestationsMois - autresMois;
+  // Montants déjà signés (+ recette, − dépense) : le CA réel du mois = tout ce qui est entré en banque,
+  // les dépenses réelles = tout ce qui est sorti. On ajoute le CA stages séparément (pas dans les dépenses).
+  const recettesReellesMois = depensesMois.filter(d => (d.montant || 0) > 0).reduce((a, d) => a + d.montant, 0);
+  const depensesReellesMois = depensesMois.filter(d => (d.montant || 0) < 0).reduce((a, d) => a + d.montant, 0); // négatif
+  const caMois = revenuStages + recettesReellesMois; // recettes réelles bancaires + revenu stages
+  const marge = caMois + depensesReellesMois; // depensesReellesMois déjà négatif
   const margePct = caMois ? Math.round((marge / caMois) * 100) : 0;
-  // Remplissage courts et impayés : pas encore de vraie source de données, restent estimés
-  const impayesN = Math.max(1, Math.round(joueurs * 0.06));
-  const impayes = impayesN * (joueurs ? Math.round(revenuJoueurs / joueurs) : 0);
+  // Remplissage courts : vrai calcul (ci-dessus). Impayés : pas de suivi mensuel réel des paiements
+  // joueurs pour l'instant — on affiche à la place les joueurs sans tarif renseigné (donnée réelle).
 
   // Rendement par coach : revenu des enfants gérés − prestation versée au coach
   const coachMap = {};
@@ -2982,6 +3262,16 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
     const margePct = revenu ? Math.round((rendement / revenu) * 100) : 0;
     return { name, nbEnfants: list.length, revenu, salaire, rendement, margePct };
   }).sort((a, b) => b.rendement - a.rendement);
+
+  // Effectif — entrées réelles du mois (basé sur la date d'inscription renseignée sur chaque fiche)
+  const aujourdHui = new Date();
+  const entreesCeMois = players.filter(p => {
+    const d = parseFRDate(p.dateInscription);
+    return d && d.getMonth() === aujourdHui.getMonth() && d.getFullYear() === aujourdHui.getFullYear();
+  }).length;
+  const filles = players.filter(p => p.sex === "F").length;
+  const garcons = players.length - filles;
+  const ageMoyen = joueurs ? Math.round(players.reduce((a, p) => a + (p.age || 0), 0) / joueurs) : 0;
 
   return (
     <main style={styles.main}>
@@ -3007,17 +3297,21 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
         <>
           <div style={{ ...styles.ckSection, marginTop: 28 }}>
             <div style={styles.ckTitle}>Santé business</div>
-            <span style={styles.ckNote}>CA & marge : chiffres réels de {MOIS_BUSINESS} · remplissage et impayés encore estimés</span>
+            <span style={styles.ckNote}>CA, marge et remplissage : chiffres réels de {MOIS_BUSINESS}</span>
           </div>
           <div style={styles.kpiRow}>
             <Stat
-              icon={Euro} label={`CA · ${MOIS_BUSINESS}`} value={eur(caMois)}
-              sub={playersSansTarif > 0 ? `⚠️ ${playersSansTarif} joueur(s) sans tarif` : `${eur(revenuJoueurs)} joueurs + ${eur(revenuStages)} stages`}
-              subColor={playersSansTarif > 0 ? T.red : T.mute}
+              icon={Euro} label={`CA réel · ${MOIS_BUSINESS}`} value={eur(caMois)}
+              sub={`${eur(recettesReellesMois)} recettes bancaires + ${eur(revenuStages)} stages`}
+              subColor={T.mute}
             />
             <Stat icon={Wallet} label={`Marge · ${MOIS_BUSINESS}`} value={eur(marge)} sub={caMois ? `${margePct}% du CA` : "—"} subColor={marge >= 0 ? T.green : T.red} tint={marge >= 0 ? T.green : T.red} />
-            <Stat icon={PieChart} label="Remplissage courts" value={`${remplissage}%`} sub={`${usedSlots}/${capacity} créneaux · estimé`} subColor={remplissage >= 75 ? T.green : T.amber} tint={remplissage >= 75 ? T.green : T.amber} />
-            <Stat icon={AlertTriangle} label="Impayés" value={eur(impayes)} sub={`${impayesN} joueur${impayesN > 1 ? "s" : ""} à relancer · estimé`} subColor={T.amber} tint={T.amber} />
+            <Stat icon={PieChart} label="Remplissage courts" value={`${remplissage}%`} sub={`${usedSlots}/${capacity} créneaux`} subColor={remplissage >= 75 ? T.green : T.amber} tint={remplissage >= 75 ? T.green : T.amber} />
+            <Stat
+              icon={AlertTriangle} label="Joueurs sans tarif renseigné" value={playersSansTarif}
+              sub={playersSansTarif > 0 ? "à corriger dans leur fiche" : "tous renseignés ✓"}
+              subColor={playersSansTarif > 0 ? T.amber : T.green} tint={playersSansTarif > 0 ? T.amber : T.green}
+            />
           </div>
         </>
       )}
@@ -3045,12 +3339,15 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
       </div>
 
       {/* 4. Effectif & fidélisation */}
-      <div style={{ ...styles.ckSection, marginTop: 28 }}><div style={styles.ckTitle}>Effectif &amp; fidélisation</div></div>
+      <div style={{ ...styles.ckSection, marginTop: 28 }}>
+        <div style={styles.ckTitle}>Effectif</div>
+        <span style={styles.ckNote}>entrées basées sur la date d'inscription renseignée sur chaque fiche</span>
+      </div>
       <div style={styles.kpiRow}>
-        <Stat icon={Users} label="Joueurs actifs" value={joueurs} sub="+4 ce mois" />
-        <Stat icon={Repeat} label="Taux de renouvellement" value="92%" sub="inscriptions" />
-        <Stat icon={UserPlus} label="Entrées ce mois" value="4" sub="nouveaux joueurs" />
-        <Stat icon={UserMinus} label="Départs ce mois" value="1" sub="à surveiller" subColor={T.amber} tint={T.amber} />
+        <Stat icon={Users} label="Joueurs actifs" value={joueurs} sub={`${ageMoyen} ans en moyenne`} subColor={T.mute} />
+        <Stat icon={UserPlus} label="Entrées ce mois" value={entreesCeMois} sub="date d'inscription ce mois-ci" subColor={T.mute} />
+        <Stat icon={Users} label="Filles" value={filles} sub={joueurs ? `${Math.round(filles / joueurs * 100)}% de l'effectif` : "—"} subColor={T.mute} />
+        <Stat icon={Users} label="Garçons" value={garcons} sub={joueurs ? `${Math.round(garcons / joueurs * 100)}% de l'effectif` : "—"} subColor={T.mute} />
       </div>
 
       {/* 5. Rendement par coach (financier, réservé à la direction) */}
@@ -3180,6 +3477,7 @@ function Sidebar({ active = "dashboard", onNavigate, onLogout, adminEmail, role 
   const nav = [
     { key: "dashboard", icon: LayoutDashboard, label: "Tableau de bord", nav: true },
     { key: "planning", icon: CalendarDays, label: "Planning", nav: true },
+    { key: "tournois", icon: Trophy, label: "Tournois", nav: true },
     { key: "joueurs", icon: UserRound, label: "Joueurs", nav: true },
     { key: "stages", icon: Tent, label: "Stages", nav: true },
     { key: "stagiaires", icon: UserPlus, label: "Stagiaires", nav: true },
@@ -3649,16 +3947,21 @@ function PlayerModal({ initial, onSave, onClose }) {
           </div>
           {utrError && <div style={{ color: T.red, fontSize: 11.5, marginTop: -8, marginBottom: 10 }}>{utrError}</div>}
 
-          <div style={styles.grid2}>
+          <div style={styles.grid3}>
             <Field label="Tarif mensuel réel (€)">
               <input style={styles.input} type="number" value={f.tarifMensuel || 0} placeholder="1200" onChange={(e) => set("tarifMensuel", +e.target.value)} />
+            </Field>
+            <Field label="Date d'inscription">
+              <input style={styles.input} value={f.dateInscription || ""} placeholder="15/09/2026" onChange={(e) => set("dateInscription", e.target.value)} />
             </Field>
             <Field label="Code d'accès (espace joueur)">
               <div style={{ display: "flex", alignItems: "center", gap: 8, height: 38 }}>
                 <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: 2, color: T.green, fontFamily: "monospace" }}>{f.codeAcces || "—"}</span>
-                <span style={{ fontSize: 10.5, color: T.dim }}>à donner au joueur / parent pour se connecter</span>
               </div>
             </Field>
+          </div>
+          <div style={{ fontSize: 11, color: T.dim, marginTop: -8, marginBottom: 14 }}>
+            La date d'inscription alimente le suivi des entrées dans le tableau de bord — à renseigner pour chaque nouveau joueur. Code d'accès à donner au joueur/parent pour se connecter.
           </div>
 
           <div style={styles.sectionLabel}>Signaux du matin</div>
@@ -4456,11 +4759,19 @@ function BloodPanel({ items, onChange }) {
   );
 }
 
+const OBJECTIF_STATUT_META = {
+  en_cours: { label: "En cours", color: "#4d9fff" },
+  atteint: { label: "Atteint ✓", color: "#1c9e56" },
+  abandonne: { label: "Abandonné", color: "#8a8f98" },
+};
+
 function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false }) {
   const p = player;
   const d = { ...defaultDetail, ...(p.detail || {}) };
   const [tab, setTab] = useState("Aperçu");
   const [rapportModal, setRapportModal] = useState(null);
+  const [objectifModal, setObjectifModal] = useState(null); // null | "new" | objectif object
+  const [resultatModal, setResultatModal] = useState(null); // null | "new" | resultat object
   const updateDetail = (patch) => onSavePlayer && onSavePlayer({ ...p, detail: { ...d, ...patch } });
   const upsertRapport = (r) => {
     const list = d.rapportsMensuels || [];
@@ -4488,7 +4799,7 @@ function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false 
   const radarData = Object.entries(d.radar).map(([axis, v]) => ({ axis, joueur: v, moyenne: 82 }));
   const months = ["Fév", "Mars", "Avr", "Mai", "Juin", "Juil.", "Août", "Sept", "Oct", "Nov", "Déc", "Jan"];
   const evoData = d.evolution.map((v, i) => ({ m: months[i] || `M${i + 1}`, v }));
-  const days = ["Ven", "Sam", "Dim", "Lun", "Mar", "Mer", "Jeu"];
+  const days = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
   const chargeData = d.charge.map((v, i) => ({ d: days[i] || `J${i + 1}`, v }));
   const chargeTotal = d.charge.reduce((a, b) => a + b, 0).toFixed(1);
   const st = statusMeta[p.session && p.session.status] || {};
@@ -4756,6 +5067,270 @@ function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false 
         </div>
       )}
 
+      {tab === "Analyse détaillée" && (
+        <div style={{ display: "grid", gap: 16 }}>
+          <div style={styles.analyseGrid}>
+            <ScoreBlock title="Analyse technique" data={d.technique} bench={TOP50.technique} onEdit={readOnly ? null : () => setScoreEdit("technique")} />
+            <ScoreBlock title="Analyse mentale" data={d.mental} bench={TOP50.mental} onEdit={readOnly ? null : () => setScoreEdit("mental")} />
+          </div>
+
+          <div style={styles.analyseGrid}>
+            <div style={styles.pcard}>
+              <div style={styles.pcardTitle}>Indicateurs clés</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                {(d.indicateurs || []).map((ind, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <Ring value={ind.value} size={54} />
+                    <div>
+                      <div style={{ fontSize: 12, color: T.mute }}>{ind.label}</div>
+                      {ind.delta ? <div style={{ fontSize: 12, color: T.green, fontWeight: 700 }}>+{ind.delta}%</div> : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={styles.pcard}>
+              <div style={styles.pcardTitle}>Évolution de l'indice global</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <LineChart data={evoData} margin={{ top: 8, right: 12, left: -18, bottom: 0 }}>
+                  <XAxis dataKey="m" tick={{ fill: T.dim, fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis domain={[0, 100]} tick={{ fill: T.dim, fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <Tooltip contentStyle={{ background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8, color: T.text, fontSize: 12 }} />
+                  <Line type="monotone" dataKey="v" stroke={T.green} strokeWidth={2.5} dot={{ r: 3, fill: T.green }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div style={styles.pcard}>
+            <div style={styles.pcardTitle}>Comparaison Top 50 mondial — synthèse</div>
+            <ResponsiveContainer width="100%" height={280}>
+              <RadarChart data={radarData} outerRadius="75%">
+                <PolarGrid stroke={T.border} />
+                <PolarAngleAxis dataKey="axis" tick={{ fill: T.mute, fontSize: 11 }} />
+                <Radar name="Moy. UTR 11" dataKey="moyenne" stroke={T.dim} fill={T.dim} fillOpacity={0.08} strokeDasharray="4 3" />
+                <Radar name="Joueur" dataKey="joueur" stroke={T.green} fill={T.green} fillOpacity={0.25} />
+              </RadarChart>
+            </ResponsiveContainer>
+            <div style={styles.radarLegend}>
+              <span style={{ color: T.green }}>● Joueur</span>
+              <span style={{ color: T.dim }}>— — Moy. UTR 11</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "Physique" && (
+        <div style={{ display: "grid", gap: 16 }}>
+          <div style={styles.pcard}>
+            <div style={styles.pcardTitle}>Profil physique</div>
+            {readOnly ? (
+              <div style={{ display: "flex", gap: 26, flexWrap: "wrap" }}>
+                <RankStat label="Taille" value={d.height || "—"} />
+                <RankStat label="Poids" value={d.weight || "—"} />
+                <RankStat label="Main / prise" value={d.hand || "—"} />
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+                <div style={{ width: 140 }}>
+                  <Field label="Taille"><input style={styles.input} value={d.height || ""} placeholder="180 cm" onChange={(e) => updateDetail({ height: e.target.value })} /></Field>
+                </div>
+                <div style={{ width: 140 }}>
+                  <Field label="Poids"><input style={styles.input} value={d.weight || ""} placeholder="70 kg" onChange={(e) => updateDetail({ weight: e.target.value })} /></Field>
+                </div>
+                <div style={{ width: 260 }}>
+                  <Field label="Main / prise"><input style={styles.input} value={d.hand || ""} placeholder="Droitier (2 mains revers)" onChange={(e) => updateDetail({ hand: e.target.value })} /></Field>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <ScoreBlock title="Analyse physique" data={d.physique} bench={TOP50.physique} onEdit={readOnly ? null : () => setScoreEdit("physique")} />
+
+          <div style={styles.pcard}>
+            <div style={styles.pcardTitle}>Charge d'entraînement — semaine (lundi → dimanche)</div>
+            <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 4 }}>
+              {chargeTotal} <span style={{ fontSize: 12, color: T.mute, fontWeight: 500 }}>· charge totale semaine</span>
+            </div>
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={chargeData} margin={{ top: 8, right: 8, left: -24, bottom: 0 }}>
+                <XAxis dataKey="d" tick={{ fill: T.dim, fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: T.dim, fontSize: 11 }} axisLine={false} tickLine={false} />
+                <Tooltip cursor={{ fill: T.greenGlow }} contentStyle={{ background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8, color: T.text, fontSize: 12 }} />
+                <Bar dataKey="v" fill={T.green} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div style={styles.pcard}>
+            <div style={styles.pcardTitle}>Récupération du jour</div>
+            <div style={{ display: "flex", gap: 26, flexWrap: "wrap" }}>
+              <RankStat label="Score récup" value={`${(d.recup && d.recup.score) || "—"}${d.recup && d.recup.score ? "%" : ""}`} />
+              <RankStat label="Sommeil" value={(d.recup && d.recup.sommeil) || "—"} />
+              <RankStat label="HRV" value={d.recup && d.recup.hrv ? `${d.recup.hrv} ms` : "—"} />
+              <RankStat label="Fatigue" value={(d.recup && d.recup.fatigue) || "—"} />
+              <RankStat label="Stress" value={(d.recup && d.recup.stress) || "—"} />
+            </div>
+          </div>
+
+          <div style={styles.pcard}>
+            <div style={styles.pcardTitle}>Derniers tests Human Fab</div>
+            {(d.tests || []).length ? d.tests.map((t, i) => (
+              <div key={i} style={styles.miniRow}>
+                <div style={{ fontSize: 12.5, fontWeight: 600 }}>{t.nom}</div>
+                <span style={{ fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
+                  {t.val} {t.up ? <TrendingUp size={12} color={T.green} /> : null}{t.date ? <span style={{ color: T.dim, fontWeight: 500 }}> · {t.date}</span> : null}
+                </span>
+              </div>
+            )) : <div style={styles.miniEmpty}>Aucun test enregistré.</div>}
+          </div>
+        </div>
+      )}
+
+      {tab === "Résultats" && (() => {
+        const resultats = d.resultats || [];
+        const victoires = resultats.filter(r => r.win).length;
+        const defaites = resultats.length - victoires;
+        const ratio = resultats.length ? Math.round((victoires / resultats.length) * 100) : 0;
+        const sorted = [...resultats].sort((a, b) => {
+          const da = parseFRDate(a.date); const db = parseFRDate(b.date);
+          return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
+        });
+        return (
+          <div style={{ display: "grid", gap: 16 }}>
+            <div style={styles.kpiRow}>
+              <Stat icon={Trophy} label="Bilan" value={`${victoires}V – ${defaites}D`} sub={`${resultats.length} match${resultats.length > 1 ? "s" : ""} enregistré${resultats.length > 1 ? "s" : ""}`} subColor={T.mute} />
+              <Stat icon={TrendingUp} label="Taux de victoire" value={`${ratio}%`} subColor={ratio >= 50 ? T.green : T.amber} tint={ratio >= 50 ? T.green : T.amber} />
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={styles.pcardTitle}>Historique des matchs</div>
+              {!readOnly && (
+                <button style={styles.smallBtn} onClick={() => setResultatModal("new")}><Plus size={13} /> Nouveau résultat</button>
+              )}
+            </div>
+
+            {sorted.length === 0 ? (
+              <div style={styles.emptyPanel}>Aucun résultat enregistré pour l'instant.{!readOnly && " Clique sur « Nouveau résultat » pour en ajouter un."}</div>
+            ) : (
+              <div style={{ display: "grid", gap: 8 }}>
+                {sorted.map((r, i) => (
+                  <div key={i} style={styles.pcard}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 14, fontWeight: 700 }}>vs {r.adv || "—"}</span>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 9px", borderRadius: 20, background: r.win ? `${T.green}18` : `${T.red}18`, color: r.win ? T.green : T.red }}>
+                            {r.win ? "Victoire" : "Défaite"}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 11.5, color: T.mute, marginTop: 3 }}>{r.tournoi}{r.tour ? ` · ${r.tour}` : ""}{r.date ? ` · ${r.date}` : ""}</div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                        <span style={{ fontSize: 14, fontWeight: 800 }}>{r.score}</span>
+                        {!readOnly && (
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <button style={styles.iconBtn} onClick={() => setResultatModal(r)}><Pencil size={13} /></button>
+                            <button style={styles.iconBtn} onClick={() => updateDetail({ resultats: resultats.filter(x => x !== r) })}><Trash2 size={13} /></button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {tab === "Objectifs" && (
+        <div style={{ display: "grid", gap: 16 }}>
+          <div style={styles.pcard}>
+            <div style={styles.pcardTitle}>Objectifs du mois (rappels SMS coach)</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {(p.objectifsMois || []).filter(Boolean).length === 0 ? (
+                <div style={styles.miniEmpty}>Aucun objectif du mois renseigné — à ajouter depuis le crayon ✏️ de la fiche.</div>
+              ) : (p.objectifsMois || []).filter(Boolean).map((o, i) => (
+                <span key={i} style={{ fontSize: 13, fontWeight: 600, padding: "6px 12px", borderRadius: 20, background: T.bg2, border: `1px solid ${T.border2}` }}>🎯 {o}</span>
+              ))}
+            </div>
+          </div>
+
+          <div style={styles.pcard}>
+            <div style={styles.pcardTitle}>Objectifs techniques</div>
+            <div style={styles.grid2}>
+              <Field label="Coup droit">
+                {readOnly ? (
+                  <div style={styles.readOnlyText}>{d.objectifCoupDroit || "—"}</div>
+                ) : (
+                  <textarea style={{ ...styles.textarea, minHeight: 55 }} value={d.objectifCoupDroit || ""} placeholder="Ex : ouvrir davantage l'angle en coup droit croisé" onChange={(e) => updateDetail({ objectifCoupDroit: e.target.value })} />
+                )}
+              </Field>
+              <Field label="Revers">
+                {readOnly ? (
+                  <div style={styles.readOnlyText}>{d.objectifRevers || "—"}</div>
+                ) : (
+                  <textarea style={{ ...styles.textarea, minHeight: 55 }} value={d.objectifRevers || ""} placeholder="Ex : gagner en profondeur sur le revers à deux mains" onChange={(e) => updateDetail({ objectifRevers: e.target.value })} />
+                )}
+              </Field>
+              <Field label="Service">
+                {readOnly ? (
+                  <div style={styles.readOnlyText}>{d.objectifService || "—"}</div>
+                ) : (
+                  <textarea style={{ ...styles.textarea, minHeight: 55 }} value={d.objectifService || ""} placeholder="Ex : monter le pourcentage de première balle à 65%" onChange={(e) => updateDetail({ objectifService: e.target.value })} />
+                )}
+              </Field>
+              <Field label="Stratégie de jeu">
+                {readOnly ? (
+                  <div style={styles.readOnlyText}>{d.objectifStrategie || "—"}</div>
+                ) : (
+                  <textarea style={{ ...styles.textarea, minHeight: 55 }} value={d.objectifStrategie || ""} placeholder="Ex : construire le point pour attaquer en coup droit" onChange={(e) => updateDetail({ objectifStrategie: e.target.value })} />
+                )}
+              </Field>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={styles.pcardTitle}>Suivi des objectifs</div>
+            {!readOnly && (
+              <button style={styles.smallBtn} onClick={() => setObjectifModal("new")}><Plus size={13} /> Nouvel objectif</button>
+            )}
+          </div>
+
+          {(d.objectifs || []).length === 0 ? (
+            <div style={styles.emptyPanel}>Aucun objectif de suivi pour l'instant.{!readOnly && " Clique sur « Nouvel objectif » pour en créer un."}</div>
+          ) : (
+            <div style={{ display: "grid", gap: 10 }}>
+              {(d.objectifs || []).map(o => {
+                const meta = OBJECTIF_STATUT_META[o.statut] || OBJECTIF_STATUT_META.en_cours;
+                return (
+                  <div key={o.id} style={styles.pcard}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 14.5, fontWeight: 700 }}>{o.texte}</span>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 9px", borderRadius: 20, background: `${meta.color}18`, color: meta.color }}>{meta.label}</span>
+                        </div>
+                        {o.categorie && <div style={{ fontSize: 11.5, color: T.mute, marginTop: 4 }}>{o.categorie}{o.echeance ? ` · Échéance ${o.echeance}` : ""}</div>}
+                        {!o.categorie && o.echeance && <div style={{ fontSize: 11.5, color: T.mute, marginTop: 4 }}>Échéance {o.echeance}</div>}
+                        {o.notes && <div style={{ fontSize: 12.5, color: T.text, marginTop: 8, lineHeight: 1.5 }}>{o.notes}</div>}
+                      </div>
+                      {!readOnly && (
+                        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                          <button style={styles.iconBtn} onClick={() => setObjectifModal(o)}><Pencil size={13} /></button>
+                          <button style={styles.iconBtn} onClick={() => updateDetail({ objectifs: (d.objectifs || []).filter(x => x.id !== o.id) })}><Trash2 size={13} /></button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {tab === "Vidéos" && (
         <DocList title="Vidéos d'entraînement" items={d.videos} kind="video" emptyLabel="Aucune vidéo pour l'instant." onChange={(v) => updateDetail({ videos: v })} readOnly={readOnly} />
       )}
@@ -4869,6 +5444,32 @@ function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false 
         />
       )}
 
+      {objectifModal && (
+        <ObjectifModal
+          initial={objectifModal === "new" ? null : objectifModal}
+          onSave={(o) => {
+            const list = d.objectifs || [];
+            const ex = list.some(x => x.id === o.id);
+            updateDetail({ objectifs: ex ? list.map(x => (x.id === o.id ? o : x)) : [o, ...list] });
+            setObjectifModal(null);
+          }}
+          onClose={() => setObjectifModal(null)}
+        />
+      )}
+
+      {resultatModal && (
+        <ResultatModal
+          initial={resultatModal === "new" ? null : resultatModal}
+          onSave={(r) => {
+            const list = d.resultats || [];
+            const isEdit = resultatModal !== "new";
+            updateDetail({ resultats: isEdit ? list.map(x => (x === resultatModal ? r : x)) : [r, ...list] });
+            setResultatModal(null);
+          }}
+          onClose={() => setResultatModal(null)}
+        />
+      )}
+
       {scoreEdit && (
         <ScoreEditModal
           title={scoreEditLabels[scoreEdit]}
@@ -4880,6 +5481,91 @@ function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false 
 
       <footer style={styles.footer}>Fiche générée le {todayLabel()} · CADART Tennis Academy</footer>
     </main>
+  );
+}
+
+function ObjectifModal({ initial, onSave, onClose }) {
+  const [f, setF] = useState(initial || { id: "obj" + Date.now(), texte: "", categorie: "", echeance: "", statut: "en_cours", notes: "" });
+  const set = (k, v) => setF({ ...f, [k]: v });
+  const canSave = f.texte.trim().length > 0;
+  return (
+    <div style={styles.overlay} onClick={onClose}>
+      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHead}>
+          <span style={styles.modalTitle}>{initial ? "Modifier l'objectif" : "Nouvel objectif"}</span>
+          <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div style={styles.modalBody}>
+          <Field label="Objectif" full>
+            <input style={styles.input} value={f.texte} placeholder="Ex : stabiliser le service à 60% de première balle" onChange={(e) => set("texte", e.target.value)} />
+          </Field>
+          <div style={styles.grid3}>
+            <Field label="Catégorie">
+              <Select value={f.categorie || ""} onChange={(v) => set("categorie", v)} options={[["", "—"], ["Technique", "Technique"], ["Physique", "Physique"], ["Mental", "Mental"], ["Compétition", "Compétition"]]} />
+            </Field>
+            <Field label="Échéance">
+              <input style={styles.input} value={f.echeance} placeholder="30/09/2026" onChange={(e) => set("echeance", e.target.value)} />
+            </Field>
+            <Field label="Statut">
+              <Select value={f.statut} onChange={(v) => set("statut", v)} options={[["en_cours", "En cours"], ["atteint", "Atteint"], ["abandonne", "Abandonné"]]} />
+            </Field>
+          </div>
+          <Field label="Notes de suivi" full>
+            <textarea style={{ ...styles.textarea, minHeight: 80 }} value={f.notes} placeholder="Observations, ajustements, points à surveiller…" onChange={(e) => set("notes", e.target.value)} />
+          </Field>
+        </div>
+        <div style={styles.modalFoot}>
+          <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
+          <button style={{ ...styles.primaryBtn, opacity: canSave ? 1 : 0.5, cursor: canSave ? "pointer" : "not-allowed" }} onClick={() => canSave && onSave(f)}><Check size={16} /> Enregistrer</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResultatModal({ initial, onSave, onClose }) {
+  const [f, setF] = useState(initial || { date: "", tournoi: "", tour: "", adv: "", score: "", win: true });
+  const set = (k, v) => setF({ ...f, [k]: v });
+  const canSave = f.adv.trim().length > 0 && f.score.trim().length > 0;
+  return (
+    <div style={styles.overlay} onClick={onClose}>
+      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHead}>
+          <span style={styles.modalTitle}>{initial ? "Modifier le résultat" : "Nouveau résultat"}</span>
+          <button style={styles.iconBtn} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div style={styles.modalBody}>
+          <div style={styles.grid2}>
+            <Field label="Tournoi">
+              <input style={styles.input} value={f.tournoi} placeholder="ITF J60 Marseille" onChange={(e) => set("tournoi", e.target.value)} />
+            </Field>
+            <Field label="Tour">
+              <input style={styles.input} value={f.tour} placeholder="1/8 finale" onChange={(e) => set("tour", e.target.value)} />
+            </Field>
+          </div>
+          <div style={styles.grid2}>
+            <Field label="Date">
+              <input style={styles.input} value={f.date} placeholder="03/08" onChange={(e) => set("date", e.target.value)} />
+            </Field>
+            <Field label="Résultat">
+              <Select value={f.win ? "win" : "loss"} onChange={(v) => set("win", v === "win")} options={[["win", "Victoire"], ["loss", "Défaite"]]} />
+            </Field>
+          </div>
+          <div style={styles.grid2}>
+            <Field label="Adversaire">
+              <input style={styles.input} value={f.adv} placeholder="J. Dubois (FRA)" onChange={(e) => set("adv", e.target.value)} />
+            </Field>
+            <Field label="Score">
+              <input style={styles.input} value={f.score} placeholder="6/3 6/4" onChange={(e) => set("score", e.target.value)} />
+            </Field>
+          </div>
+        </div>
+        <div style={styles.modalFoot}>
+          <button style={styles.ghostBtn} onClick={onClose}>Annuler</button>
+          <button style={{ ...styles.primaryBtn, opacity: canSave ? 1 : 0.5, cursor: canSave ? "pointer" : "not-allowed" }} onClick={() => canSave && onSave(f)}><Check size={16} /> Enregistrer</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -5132,7 +5818,10 @@ const styles = {
   fieldLabel: { fontSize: 11.5, color: T.mute, marginBottom: 5, fontWeight: 500 },
   input: { width: "100%", boxSizing: "border-box", background: T.card, border: `1px solid ${T.border2}`, borderRadius: 9, padding: "9px 11px", color: T.text, fontSize: 13.5, fontFamily: FONT, outline: "none" },
   textarea: { width: "100%", boxSizing: "border-box", background: T.card, border: `1px solid ${T.border2}`, borderRadius: 9, padding: "9px 11px", color: T.text, fontSize: 13.5, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5 },
+  readOnlyText: { fontSize: 13.5, color: T.text, lineHeight: 1.5, padding: "9px 0" },
   toggle: { width: "100%", background: T.card, border: `1px solid ${T.border2}`, borderRadius: 9, padding: "9px 11px", color: T.mute, fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: FONT },
   toggleOn: { background: T.greenGlow, borderColor: `${T.green}66`, color: T.green },
   modalFoot: { display: "flex", justifyContent: "flex-end", gap: 10, padding: "16px 20px", borderTop: `1px solid ${T.border}`, position: "sticky", bottom: 0, background: T.bg2 },
 };
+
+    
