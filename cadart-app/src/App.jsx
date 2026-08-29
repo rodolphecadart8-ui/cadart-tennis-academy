@@ -54,6 +54,23 @@ const AXES = ["Service", "Retour", "Coup droit", "Revers", "Volée", "Jeu de jam
 
 const COURTS = ["Court 1", "Court 2", "Court 3", "Court 4", "Court 5"];
 const SALLES = ["Salle physique 1", "Salle physique 2"];
+/* Regroupe les joueurs par court/salle occupé — utilisé par le Planning (admin/coach) et
+   par l'espace joueur, qui a lui aussi accès au planning complet. */
+function computeFacilityGroups(players) {
+  const map = {};
+  (players || []).forEach(p => {
+    if (!p.session || !p.session.court) return;
+    const key = p.session.court;
+    if (!map[key]) map[key] = [];
+    map[key].push(p);
+  });
+  const isSalle = (n) => /salle/i.test(n);
+  const extras = Object.keys(map).filter(n => !COURTS.includes(n) && !SALLES.includes(n));
+  const courtNames = [...COURTS, ...extras.filter(n => !isSalle(n))];
+  const salleNames = [...SALLES, ...extras.filter(n => isSalle(n))];
+  const build = (names) => names.map(name => ({ court: name, players: map[name] || [] }));
+  return { courts: build(courtNames), salles: build(salleNames) };
+}
 
 /* Aucune estimation par défaut : un joueur sans tarif renseigné compte pour 0€
    et déclenche une alerte, plutôt que de fausser silencieusement le calcul. */
@@ -546,7 +563,7 @@ const DEPENSES_CATEGORIES_SEED = [
   "Charges sociales (URSSAF)", "Impôts et taxes", "Comptabilité / gestion", "Frais bancaires",
   "Remboursements frais", "Avances / remboursements Cadart", "Adhésions fédérales",
   "Abonnements (site/paiement en ligne)", "Logiciel de gestion (Jazz)", "Prévoyance santé",
-  "Retraite (AG2R)", "Prestataires divers", "Ligue de Provence (licences / tickets)",
+  "Retraite (AG2R)", "Prestataires divers", "Ligue de Provence (licences / tickets)", "Restaurant (Les Terrasses du Country)",
   "Matériel", "Marketing / communication", "Électricité / eau", "Entretien", "Administratif", "Autre",
 ];
 /* Catégories de dépenses/recettes — éditables depuis l'onglet Tableau de bord financier */
@@ -566,173 +583,208 @@ async function saveCategories(c) {
 /* Données réelles importées du tableau de bord financier (TMA_Dashboard.xlsx) —
    janvier à juin 2026. Montants signés : positif = recette, négatif = dépense,
    exactement comme dans le relevé bancaire d'origine. */
+/* Données réelles importées du tableau de bord financier (TMA_Dashboard.xlsx) —
+   janvier à juillet 2026. Montants signés : positif = recette, négatif = dépense,
+   exactement comme dans le relevé bancaire d'origine. */
 const DEPENSES_SEED = [
   { id: "imp1", mois: "Avril 2026", categorie: "Abonnements (site/paiement en ligne)", libelle: "Abonnements (site/paiement en ligne)", montant: -139.2 },
   { id: "imp2", mois: "Mai 2026", categorie: "Abonnements (site/paiement en ligne)", libelle: "Abonnements (site/paiement en ligne)", montant: -19.2 },
   { id: "imp3", mois: "Juin 2026", categorie: "Abonnements (site/paiement en ligne)", libelle: "Abonnements (site/paiement en ligne)", montant: -19.2 },
-  { id: "imp4", mois: "Février 2026", categorie: "Adhésions fédérales", libelle: "Adhésions fédérales", montant: -90 },
-  { id: "imp5", mois: "Janvier 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 2083.3 },
-  { id: "imp6", mois: "Février 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 833.32 },
-  { id: "imp7", mois: "Mars 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 416.66 },
-  { id: "imp8", mois: "Avril 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 416.66 },
-  { id: "imp9", mois: "Mai 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 416.66 },
-  { id: "imp10", mois: "Juin 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 416.66 },
-  { id: "imp11", mois: "Janvier 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
-  { id: "imp12", mois: "Février 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
-  { id: "imp13", mois: "Mars 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
-  { id: "imp14", mois: "Avril 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
-  { id: "imp15", mois: "Mai 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
-  { id: "imp16", mois: "Juin 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
-  { id: "imp17", mois: "Janvier 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: -2700 },
-  { id: "imp18", mois: "Février 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: -2683.61 },
-  { id: "imp19", mois: "Mars 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: 100 },
-  { id: "imp20", mois: "Avril 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: 3268.2 },
-  { id: "imp21", mois: "Mai 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: 5622 },
-  { id: "imp22", mois: "Juin 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: 650 },
-  { id: "imp23", mois: "Janvier 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -565 },
-  { id: "imp24", mois: "Février 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -926 },
-  { id: "imp25", mois: "Mars 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -1142 },
-  { id: "imp26", mois: "Avril 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -1142 },
-  { id: "imp27", mois: "Mai 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -1142 },
-  { id: "imp28", mois: "Juin 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -1142 },
-  { id: "imp29", mois: "Janvier 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 31196.7 },
-  { id: "imp30", mois: "Février 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 30645.5 },
-  { id: "imp31", mois: "Mars 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 33327.5 },
-  { id: "imp32", mois: "Avril 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 33139.73 },
-  { id: "imp33", mois: "Mai 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 23278.22 },
-  { id: "imp34", mois: "Juin 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 26316.64 },
-  { id: "imp35", mois: "Janvier 2026", categorie: "Frais bancaires", libelle: "Frais bancaires", montant: 5.25 },
-  { id: "imp36", mois: "Février 2026", categorie: "Frais bancaires", libelle: "Frais bancaires", montant: -1.57 },
-  { id: "imp37", mois: "Mars 2026", categorie: "Frais bancaires", libelle: "Frais bancaires", montant: -55.25 },
-  { id: "imp38", mois: "Mai 2026", categorie: "Frais bancaires", libelle: "Frais bancaires", montant: -19 },
-  { id: "imp39", mois: "Janvier 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -600.08 },
-  { id: "imp40", mois: "Février 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -312 },
-  { id: "imp41", mois: "Mars 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -258 },
-  { id: "imp42", mois: "Avril 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -258 },
-  { id: "imp43", mois: "Mai 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -258 },
-  { id: "imp44", mois: "Juin 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -258 },
-  { id: "imp45", mois: "Avril 2026", categorie: "Impôts (DGFIP)", libelle: "Impôts (DGFIP)", montant: -92 },
-  { id: "imp46", mois: "Mai 2026", categorie: "Impôts (DGFIP)", libelle: "Impôts (DGFIP)", montant: -92 },
-  { id: "imp47", mois: "Juin 2026", categorie: "Impôts (DGFIP)", libelle: "Impôts (DGFIP)", montant: -92 },
-  { id: "imp48", mois: "Février 2026", categorie: "Ligue de Provence (licences / tickets)", libelle: "Ligue de Provence (licences / tickets)", montant: -1335 },
-  { id: "imp49", mois: "Juin 2026", categorie: "Ligue de Provence (licences / tickets)", libelle: "Ligue de Provence (licences / tickets)", montant: -334 },
-  { id: "imp50", mois: "Mars 2026", categorie: "Location terrains (Country Club Aixois)", libelle: "Location terrains (Country Club Aixois)", montant: -3988 },
-  { id: "imp51", mois: "Mai 2026", categorie: "Location terrains (Country Club Aixois)", libelle: "Location terrains (Country Club Aixois)", montant: -6692 },
-  { id: "imp52", mois: "Juin 2026", categorie: "Location terrains (Country Club Aixois)", libelle: "Location terrains (Country Club Aixois)", montant: -3592 },
-  { id: "imp53", mois: "Janvier 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
-  { id: "imp54", mois: "Février 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
-  { id: "imp55", mois: "Mars 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
-  { id: "imp56", mois: "Avril 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
-  { id: "imp57", mois: "Mai 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
-  { id: "imp58", mois: "Juin 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
-  { id: "imp59", mois: "Janvier 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -800 },
-  { id: "imp60", mois: "Février 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -4600 },
-  { id: "imp61", mois: "Mars 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -2200 },
-  { id: "imp62", mois: "Mai 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -1000 },
-  { id: "imp63", mois: "Juin 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -1000 },
-  { id: "imp64", mois: "Janvier 2026", categorie: "Prestataires divers", libelle: "Prestataires divers", montant: -700 },
-  { id: "imp65", mois: "Janvier 2026", categorie: "Prévoyance santé", libelle: "Prévoyance santé", montant: -168.94 },
-  { id: "imp66", mois: "Janvier 2026", categorie: "Retraite (AG2R)", libelle: "Retraite (AG2R)", montant: -359.55 },
-  { id: "imp67", mois: "Avril 2026", categorie: "Retraite (AG2R)", libelle: "Retraite (AG2R)", montant: -654.18 },
-  { id: "imp68", mois: "Janvier 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 2550 },
-  { id: "imp69", mois: "Février 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 11450 },
-  { id: "imp70", mois: "Mars 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 1200 },
-  { id: "imp71", mois: "Avril 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 1450 },
-  { id: "imp72", mois: "Mai 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 950 },
-  { id: "imp73", mois: "Juin 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 21450 },
-  { id: "imp74", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Alona svetova", montant: -300 },
-  { id: "imp75", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Antoine Pages", montant: -2000 },
-  { id: "imp76", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Arnaud Ardilly", montant: -472 },
-  { id: "imp77", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Christophe ficot", montant: -219 },
-  { id: "imp78", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -2185 },
-  { id: "imp79", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -1830.7 },
-  { id: "imp80", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -2112.5 },
-  { id: "imp81", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -2200 },
-  { id: "imp82", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -927.15 },
-  { id: "imp83", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -2000 },
-  { id: "imp84", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -4750 },
-  { id: "imp85", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -2500 },
-  { id: "imp86", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -3650 },
-  { id: "imp87", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -4750 },
-  { id: "imp88", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: -2500 },
-  { id: "imp89", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: -3550 },
-  { id: "imp90", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: -3000 },
-  { id: "imp91", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: -7362 },
-  { id: "imp92", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Gabin revolar", montant: -355.32 },
-  { id: "imp93", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Giovann pisella", montant: -550 },
-  { id: "imp94", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -2807.55 },
-  { id: "imp95", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -1500 },
-  { id: "imp96", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -2807.55 },
-  { id: "imp97", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -2807.55 },
-  { id: "imp98", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -2811 },
-  { id: "imp99", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -1307.55 },
-  { id: "imp100", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -3900 },
-  { id: "imp101", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -328 },
-  { id: "imp102", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -2982.6 },
-  { id: "imp103", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -2600 },
-  { id: "imp104", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -3482.65 },
-  { id: "imp105", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -1834 },
-  { id: "imp106", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -1145.86 },
-  { id: "imp107", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -1411.28 },
-  { id: "imp108", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -1500 },
-  { id: "imp109", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -2669.28 },
-  { id: "imp110", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -2300 },
-  { id: "imp111", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -1726.84 },
-  { id: "imp112", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Kim tabeau", montant: -1292.93 },
-  { id: "imp113", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Kim tabeau", montant: -1832.12 },
-  { id: "imp114", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -3000 },
-  { id: "imp115", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -2467.5 },
-  { id: "imp116", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -1472.5 },
-  { id: "imp117", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -2943 },
-  { id: "imp118", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -1300 },
-  { id: "imp119", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -2693 },
-  { id: "imp120", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Le chop Bruno", montant: -3300 },
-  { id: "imp121", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Le chop Bruno", montant: -1400 },
-  { id: "imp122", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Le chop Bruno", montant: -1766.6 },
-  { id: "imp123", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Lucas", montant: -100 },
-  { id: "imp124", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Lucas desgranges", montant: -289.5 },
-  { id: "imp125", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Marc Verpeaux", montant: -410 },
-  { id: "imp126", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Matheo Vivier", montant: -2249.28 },
-  { id: "imp127", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Matheo Vivier", montant: -150 },
-  { id: "imp128", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -1877.78 },
-  { id: "imp129", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -949.78 },
-  { id: "imp130", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -949.78 },
-  { id: "imp131", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -949.79 },
-  { id: "imp132", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -949.78 },
-  { id: "imp133", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2000 },
-  { id: "imp134", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2000 },
-  { id: "imp135", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2000 },
-  { id: "imp136", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -3012 },
-  { id: "imp137", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2200 },
-  { id: "imp138", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2550 },
-  { id: "imp139", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2500 },
-  { id: "imp140", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2700 },
-  { id: "imp141", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2700 },
-  { id: "imp142", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2900 },
-  { id: "imp143", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2700 },
-  { id: "imp144", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2700 },
-  { id: "imp145", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -2500 },
-  { id: "imp146", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -1800 },
-  { id: "imp147", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -900 },
-  { id: "imp148", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -800 },
-  { id: "imp149", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -250 },
-  { id: "imp150", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Pablo Besse", montant: -65 },
-  { id: "imp151", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Pablo Besse", montant: -350 },
-  { id: "imp152", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Pablo Besse", montant: -250 },
-  { id: "imp153", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Poulet Tom", montant: -500 },
-  { id: "imp154", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Remy romain", montant: -3500 },
-  { id: "imp155", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Remy romain", montant: -4258 },
-  { id: "imp156", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Remy romain", montant: -2750 },
-  { id: "imp157", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Say sophanuth", montant: -750 },
-  { id: "imp158", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Sohel boucourt", montant: -425 },
-  { id: "imp159", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Stephane giop", montant: -425.25 },
-  { id: "imp160", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Stephane giop", montant: -472.5 },
-  { id: "imp161", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1500 },
-  { id: "imp162", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1000 },
-  { id: "imp163", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1500 },
-  { id: "imp164", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -2300 },
-  { id: "imp165", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -700 },
-  { id: "imp166", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1500 },
+  { id: "imp4", mois: "Juillet 2026", categorie: "Abonnements (site/paiement en ligne)", libelle: "Abonnements (site/paiement en ligne)", montant: -19.2 },
+  { id: "imp5", mois: "Février 2026", categorie: "Adhésions fédérales", libelle: "Adhésions fédérales", montant: -90 },
+  { id: "imp6", mois: "Janvier 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 2083.3 },
+  { id: "imp7", mois: "Février 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 833.32 },
+  { id: "imp8", mois: "Mars 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 416.66 },
+  { id: "imp9", mois: "Avril 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 416.66 },
+  { id: "imp10", mois: "Mai 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 416.66 },
+  { id: "imp11", mois: "Juin 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 416.66 },
+  { id: "imp12", mois: "Juillet 2026", categorie: "Aide apprentissage (État)", libelle: "Aide apprentissage (État)", montant: 416.66 },
+  { id: "imp13", mois: "Janvier 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
+  { id: "imp14", mois: "Février 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
+  { id: "imp15", mois: "Mars 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
+  { id: "imp16", mois: "Avril 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
+  { id: "imp17", mois: "Mai 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
+  { id: "imp18", mois: "Juin 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
+  { id: "imp19", mois: "Juillet 2026", categorie: "Assurance (GAN)", libelle: "Assurance (GAN)", montant: -69.92 },
+  { id: "imp20", mois: "Janvier 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: -2700 },
+  { id: "imp21", mois: "Février 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: -2683.61 },
+  { id: "imp22", mois: "Mars 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: 100 },
+  { id: "imp23", mois: "Avril 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: 3268.2 },
+  { id: "imp24", mois: "Mai 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: 5622 },
+  { id: "imp25", mois: "Juin 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: 650 },
+  { id: "imp26", mois: "Juillet 2026", categorie: "Avances / remboursements Cadart", libelle: "Avances / remboursements Cadart", montant: 2950 },
+  { id: "imp27", mois: "Janvier 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -565 },
+  { id: "imp28", mois: "Février 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -926 },
+  { id: "imp29", mois: "Mars 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -1142 },
+  { id: "imp30", mois: "Avril 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -1142 },
+  { id: "imp31", mois: "Mai 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -1142 },
+  { id: "imp32", mois: "Juin 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -1142 },
+  { id: "imp33", mois: "Juillet 2026", categorie: "Charges sociales (URSSAF)", libelle: "Charges sociales (URSSAF)", montant: -1159 },
+  { id: "imp34", mois: "Janvier 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 31196.7 },
+  { id: "imp35", mois: "Février 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 30645.5 },
+  { id: "imp36", mois: "Mars 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 33327.5 },
+  { id: "imp37", mois: "Avril 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 33139.73 },
+  { id: "imp38", mois: "Mai 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 23278.22 },
+  { id: "imp39", mois: "Juin 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 26316.64 },
+  { id: "imp40", mois: "Juillet 2026", categorie: "Cotisations familles / adhérents", libelle: "Cotisations familles / adhérents", montant: 39201.36 },
+  { id: "imp41", mois: "Janvier 2026", categorie: "Frais bancaires", libelle: "Frais bancaires", montant: 5.25 },
+  { id: "imp42", mois: "Février 2026", categorie: "Frais bancaires", libelle: "Frais bancaires", montant: -1.57 },
+  { id: "imp43", mois: "Mars 2026", categorie: "Frais bancaires", libelle: "Frais bancaires", montant: -55.25 },
+  { id: "imp44", mois: "Mai 2026", categorie: "Frais bancaires", libelle: "Frais bancaires", montant: -19 },
+  { id: "imp45", mois: "Janvier 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -600.08 },
+  { id: "imp46", mois: "Février 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -312 },
+  { id: "imp47", mois: "Mars 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -258 },
+  { id: "imp48", mois: "Avril 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -258 },
+  { id: "imp49", mois: "Mai 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -258 },
+  { id: "imp50", mois: "Juin 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -258 },
+  { id: "imp51", mois: "Juillet 2026", categorie: "Honoraires comptables (Exaudis)", libelle: "Honoraires comptables (Exaudis)", montant: -258 },
+  { id: "imp52", mois: "Avril 2026", categorie: "Impôts (DGFIP)", libelle: "Impôts (DGFIP)", montant: -92 },
+  { id: "imp53", mois: "Mai 2026", categorie: "Impôts (DGFIP)", libelle: "Impôts (DGFIP)", montant: -92 },
+  { id: "imp54", mois: "Juin 2026", categorie: "Impôts (DGFIP)", libelle: "Impôts (DGFIP)", montant: -92 },
+  { id: "imp55", mois: "Juillet 2026", categorie: "Impôts (DGFIP)", libelle: "Impôts (DGFIP)", montant: -94 },
+  { id: "imp56", mois: "Février 2026", categorie: "Ligue de Provence (licences / tickets)", libelle: "Ligue de Provence (licences / tickets)", montant: -1335 },
+  { id: "imp57", mois: "Juin 2026", categorie: "Ligue de Provence (licences / tickets)", libelle: "Ligue de Provence (licences / tickets)", montant: -334 },
+  { id: "imp58", mois: "Juillet 2026", categorie: "Ligue de Provence (licences / tickets)", libelle: "Ligue de Provence (licences / tickets)", montant: -500 },
+  { id: "imp59", mois: "Mars 2026", categorie: "Location terrains (Country Club Aixois)", libelle: "Location terrains (Country Club Aixois)", montant: -3988 },
+  { id: "imp60", mois: "Mai 2026", categorie: "Location terrains (Country Club Aixois)", libelle: "Location terrains (Country Club Aixois)", montant: -6692 },
+  { id: "imp61", mois: "Juin 2026", categorie: "Location terrains (Country Club Aixois)", libelle: "Location terrains (Country Club Aixois)", montant: -3592 },
+  { id: "imp62", mois: "Juillet 2026", categorie: "Location terrains (Country Club Aixois)", libelle: "Location terrains (Country Club Aixois)", montant: -3308 },
+  { id: "imp63", mois: "Janvier 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
+  { id: "imp64", mois: "Février 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
+  { id: "imp65", mois: "Mars 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
+  { id: "imp66", mois: "Avril 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
+  { id: "imp67", mois: "Mai 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
+  { id: "imp68", mois: "Juin 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
+  { id: "imp69", mois: "Juillet 2026", categorie: "Logiciel de gestion (Jazz)", libelle: "Logiciel de gestion (Jazz)", montant: -13 },
+  { id: "imp70", mois: "Janvier 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -800 },
+  { id: "imp71", mois: "Février 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -4600 },
+  { id: "imp72", mois: "Mars 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -2200 },
+  { id: "imp73", mois: "Mai 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -1000 },
+  { id: "imp74", mois: "Juin 2026", categorie: "Loyer Xavier Louis", libelle: "Loyer Xavier Louis", montant: -1000 },
+  { id: "imp75", mois: "Janvier 2026", categorie: "Prestataires divers", libelle: "Prestataires divers", montant: -700 },
+  { id: "imp76", mois: "Janvier 2026", categorie: "Prévoyance santé", libelle: "Prévoyance santé", montant: -168.94 },
+  { id: "imp77", mois: "Juillet 2026", categorie: "Prévoyance santé", libelle: "Prévoyance santé", montant: -173.56 },
+  { id: "imp78", mois: "Juillet 2026", categorie: "Restaurant (Les Terrasses du Country)", libelle: "Restaurant (Les Terrasses du Country)", montant: -3275 },
+  { id: "imp79", mois: "Janvier 2026", categorie: "Retraite (AG2R)", libelle: "Retraite (AG2R)", montant: -359.55 },
+  { id: "imp80", mois: "Avril 2026", categorie: "Retraite (AG2R)", libelle: "Retraite (AG2R)", montant: -654.18 },
+  { id: "imp81", mois: "Juillet 2026", categorie: "Retraite (AG2R)", libelle: "Retraite (AG2R)", montant: -708.83 },
+  { id: "imp82", mois: "Janvier 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 2550 },
+  { id: "imp83", mois: "Février 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 11450 },
+  { id: "imp84", mois: "Mars 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 1200 },
+  { id: "imp85", mois: "Avril 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 1450 },
+  { id: "imp86", mois: "Mai 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 950 },
+  { id: "imp87", mois: "Juin 2026", categorie: "Sponsoring (Amatch)", libelle: "Sponsoring (Amatch)", montant: 21450 },
+  { id: "imp88", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Alona svetova", montant: -300 },
+  { id: "imp89", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Antoine Pages", montant: -2000 },
+  { id: "imp90", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Arnaud Ardilly", montant: -472 },
+  { id: "imp91", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Arnaud Ardilly", montant: -730 },
+  { id: "imp92", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Baptiste Bloch", montant: -650 },
+  { id: "imp93", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Christophe ficot", montant: -219 },
+  { id: "imp94", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -2185 },
+  { id: "imp95", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -1830.7 },
+  { id: "imp96", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -2112.5 },
+  { id: "imp97", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -2200 },
+  { id: "imp98", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -927.15 },
+  { id: "imp99", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Elie Gadilhe", montant: -1037.5 },
+  { id: "imp100", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -2000 },
+  { id: "imp101", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -4750 },
+  { id: "imp102", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -2500 },
+  { id: "imp103", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -3650 },
+  { id: "imp104", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Eric Dochtermann", montant: -4750 },
+  { id: "imp105", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: -2500 },
+  { id: "imp106", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: -3550 },
+  { id: "imp107", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: -3000 },
+  { id: "imp108", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: -7362 },
+  { id: "imp109", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Frederic Caselles", montant: -2000 },
+  { id: "imp110", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Gabin revolar", montant: -355.32 },
+  { id: "imp111", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Gabin revolar", montant: -1029 },
+  { id: "imp112", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Giovann pisella", montant: -550 },
+  { id: "imp113", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -2807.55 },
+  { id: "imp114", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -1500 },
+  { id: "imp115", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -2807.55 },
+  { id: "imp116", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -2807.55 },
+  { id: "imp117", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -2811 },
+  { id: "imp118", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -1307.55 },
+  { id: "imp119", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Heurtebise", montant: -4307.55 },
+  { id: "imp120", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -3900 },
+  { id: "imp121", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -328 },
+  { id: "imp122", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -2982.6 },
+  { id: "imp123", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -2600 },
+  { id: "imp124", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -3482.65 },
+  { id: "imp125", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -1834 },
+  { id: "imp126", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Jeremy Cayla", montant: -2362 },
+  { id: "imp127", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -1145.86 },
+  { id: "imp128", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -1411.28 },
+  { id: "imp129", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -1500 },
+  { id: "imp130", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -2669.28 },
+  { id: "imp131", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -2300 },
+  { id: "imp132", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Jules Aurouze", montant: -1726.84 },
+  { id: "imp133", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Kim tabeau", montant: -1292.93 },
+  { id: "imp134", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Kim tabeau", montant: -1832.12 },
+  { id: "imp135", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -3000 },
+  { id: "imp136", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -2467.5 },
+  { id: "imp137", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -1472.5 },
+  { id: "imp138", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -2943 },
+  { id: "imp139", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -1300 },
+  { id: "imp140", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -2693 },
+  { id: "imp141", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Lami Sebastien", montant: -1500 },
+  { id: "imp142", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Le chop Bruno", montant: -3300 },
+  { id: "imp143", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Le chop Bruno", montant: -1400 },
+  { id: "imp144", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Le chop Bruno", montant: -1766.6 },
+  { id: "imp145", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Lucas", montant: -100 },
+  { id: "imp146", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Lucas desgranges", montant: -289.5 },
+  { id: "imp147", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Lucas desgranges", montant: -1938.5 },
+  { id: "imp148", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Marc Verpeaux", montant: -410 },
+  { id: "imp149", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Marc Verpeaux", montant: -535 },
+  { id: "imp150", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Matheo Vivier", montant: -2249.28 },
+  { id: "imp151", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Matheo Vivier", montant: -150 },
+  { id: "imp152", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -1877.78 },
+  { id: "imp153", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -949.78 },
+  { id: "imp154", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -949.78 },
+  { id: "imp155", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -949.79 },
+  { id: "imp156", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -949.78 },
+  { id: "imp157", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Matis Roche", montant: -972.7 },
+  { id: "imp158", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Matis robotti", montant: -1400 },
+  { id: "imp159", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2000 },
+  { id: "imp160", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2000 },
+  { id: "imp161", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2000 },
+  { id: "imp162", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -3012 },
+  { id: "imp163", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2200 },
+  { id: "imp164", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Maxime Labasque", montant: -2550 },
+  { id: "imp165", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2500 },
+  { id: "imp166", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2700 },
+  { id: "imp167", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2700 },
+  { id: "imp168", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2900 },
+  { id: "imp169", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2700 },
+  { id: "imp170", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2700 },
+  { id: "imp171", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Mazaleyrat Maxime", montant: -2700 },
+  { id: "imp172", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -2500 },
+  { id: "imp173", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -1800 },
+  { id: "imp174", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -900 },
+  { id: "imp175", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -800 },
+  { id: "imp176", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -250 },
+  { id: "imp177", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Olivier Rebeyrotte", montant: -2483 },
+  { id: "imp178", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Pablo Besse", montant: -65 },
+  { id: "imp179", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Pablo Besse", montant: -350 },
+  { id: "imp180", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Pablo Besse", montant: -250 },
+  { id: "imp181", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Pablo Besse", montant: -100 },
+  { id: "imp182", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Poulet Tom", montant: -500 },
+  { id: "imp183", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Remy romain", montant: -3500 },
+  { id: "imp184", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Remy romain", montant: -4258 },
+  { id: "imp185", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Remy romain", montant: -2750 },
+  { id: "imp186", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Remy romain", montant: -2750 },
+  { id: "imp187", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Say sophanuth", montant: -750 },
+  { id: "imp188", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Sohel boucourt", montant: -425 },
+  { id: "imp189", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Sohel boucourt", montant: -800 },
+  { id: "imp190", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Stephane giop", montant: -425.25 },
+  { id: "imp191", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Stephane giop", montant: -472.5 },
+  { id: "imp192", mois: "Janvier 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1500 },
+  { id: "imp193", mois: "Février 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1000 },
+  { id: "imp194", mois: "Mars 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1500 },
+  { id: "imp195", mois: "Avril 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -2300 },
+  { id: "imp196", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -700 },
+  { id: "imp197", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1500 },
+  { id: "imp198", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1200 },
 ];
 
 /* ---------- Le cerveau : analyse d'un joueur ---------- */
@@ -892,7 +944,7 @@ function AuthGate() {
       try {
         const r = await window.storage.get(SESSION_KEY);
         let s = r && r.value ? JSON.parse(r.value) : null;
-        if (s && s.role === "admin" && supabase) {
+        if (s && (s.role === "admin" || s.role === "coach") && supabase) {
           const { data } = await supabase.auth.getSession();
           if (!data || !data.session) s = null; // session expirée côté Supabase : on redemande la connexion
         }
@@ -912,7 +964,7 @@ function AuthGate() {
     return <div style={{ ...styles.shell, alignItems: "center", justifyContent: "center", display: "flex" }}><div style={{ color: T.mute }}>Chargement…</div></div>;
   }
   if (!session) return <LoginScreen onLogin={login} />;
-  if (session.role === "admin") return <CoachDashboard onLogout={logout} adminEmail={session.email} />;
+  if (session.role === "admin" || session.role === "coach") return <CoachDashboard onLogout={logout} adminEmail={session.email} role={session.role} />;
   return <PlayerPortal playerId={session.playerId} onLogout={logout} />;
 }
 
@@ -946,7 +998,11 @@ function LoginScreen({ onLogin }) {
     const { data, error: err } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
     setAuthLoading(false);
     if (err) { setAuthError("Email ou mot de passe incorrect."); return; }
-    onLogin({ role: "admin", email: (data.user && data.user.email) || email.trim() });
+    // Le rôle (admin / coach) est défini dans Supabase → Authentication → Users → métadonnées de l'utilisateur.
+    // Par défaut (rien de précisé) : coach, l'accès le plus restreint.
+    const metaRole = data.user && data.user.user_metadata && data.user.user_metadata.role;
+    const role = metaRole === "admin" ? "admin" : "coach";
+    onLogin({ role, email: (data.user && data.user.email) || email.trim() });
   };
 
   return (
@@ -1027,6 +1083,7 @@ function LoginScreen({ onLogin }) {
 function PlayerPortal({ playerId, onLogout }) {
   const [players, setPlayers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [view, setView] = useState("fiche"); // "fiche" | "planning"
   useEffect(() => {
     (async () => { const stored = await loadPlayers(); setPlayers(stored || SEED); setLoading(false); })();
   }, []);
@@ -1048,6 +1105,7 @@ function PlayerPortal({ playerId, onLogout }) {
     setPlayers(next);
     savePlayers(next);
   };
+  const facilityGroups = computeFacilityGroups(players);
 
   return (
     <div style={styles.shell}>
@@ -1068,18 +1126,54 @@ function PlayerPortal({ playerId, onLogout }) {
           <div style={{ fontSize: 11, color: T.dim, textTransform: "uppercase", letterSpacing: 0.6 }}>Connecté en tant que</div>
           <div style={{ fontSize: 14.5, fontWeight: 800, color: T.text, marginTop: 4 }}>{player.flag} {player.name}</div>
         </div>
+        <nav style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 2 }}>
+          <div
+            onClick={() => setView("fiche")}
+            style={{ ...styles.navItem, ...(view === "fiche" ? styles.navActive : {}), cursor: "pointer" }}
+          >
+            <UserRound size={18} color={view === "fiche" ? T.green : T.mute} />
+            <span style={{ color: view === "fiche" ? T.text : T.mute }}>Ma fiche</span>
+          </div>
+          <div
+            onClick={() => setView("planning")}
+            style={{ ...styles.navItem, ...(view === "planning" ? styles.navActive : {}), cursor: "pointer" }}
+          >
+            <CalendarDays size={18} color={view === "planning" ? T.green : T.mute} />
+            <span style={{ color: view === "planning" ? T.text : T.mute }}>Planning</span>
+          </div>
+        </nav>
         <div style={{ marginTop: "auto", paddingTop: 20 }}>
           <button style={{ ...styles.ghostBtn, width: "100%", justifyContent: "center" }} onClick={onLogout}>
             <ArrowLeft size={14} /> Déconnexion
           </button>
         </div>
       </aside>
-      <PlayerProfile player={player} onBack={onLogout} onEdit={() => {}} onSavePlayer={savePlayer} readOnly />
+      {view === "fiche" ? (
+        <PlayerProfile player={player} onBack={onLogout} onEdit={() => {}} onSavePlayer={savePlayer} readOnly />
+      ) : (
+        <main style={styles.main}>
+          <header style={styles.header}>
+            <div>
+              <div style={styles.h1}>Planning</div>
+              <div style={styles.sub}>Vue d'ensemble des courts et salles physiques</div>
+            </div>
+          </header>
+          <div style={styles.ckSection}><div style={styles.ckTitle}>Courts</div></div>
+          <div style={{ ...styles.facilityRow, gridTemplateColumns: `repeat(${facilityGroups.courts.length}, minmax(0, 1fr))` }}>
+            {facilityGroups.courts.map(g => <CourtCard key={g.court} group={g} onEdit={() => {}} />)}
+          </div>
+          <div style={{ ...styles.ckSection, marginTop: 24 }}><div style={styles.ckTitle}>Salles physiques</div></div>
+          <div style={{ ...styles.facilityRow, gridTemplateColumns: `repeat(${facilityGroups.salles.length}, minmax(0, 1fr))` }}>
+            {facilityGroups.salles.map(g => <CourtCard key={g.court} group={g} onEdit={() => {}} kind="salle" />)}
+          </div>
+          <footer style={styles.footer}>CADART Tennis Academy · Planning — lecture seule.</footer>
+        </main>
+      )}
     </div>
   );
 }
 
-function CoachDashboard({ onLogout, adminEmail }) {
+function CoachDashboard({ onLogout, adminEmail, role }) {
   const [players, setPlayers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null); // null | "new" | player object
@@ -1089,7 +1183,12 @@ function CoachDashboard({ onLogout, adminEmail }) {
   const openProfile = (p) => setProfileId(p.id);
   const [showReminders, setShowReminders] = useState(false);
   const [view, setView] = useState("dashboard");
-  const navigate = (v) => { setView(v); setProfileId(null); };
+  const VUES_FINANCIERES = ["depenses", "ia"];
+  const navigate = (v) => {
+    if (role !== "admin" && VUES_FINANCIERES.includes(v)) return; // coach : accès refusé, on ignore
+    setView(v);
+    setProfileId(null);
+  };
   const [stages, setStages] = useState([]);
   const [depenses, setDepenses] = useState([]);
   const [categories, setCategories] = useState(DEPENSES_CATEGORIES_SEED);
@@ -1150,27 +1249,60 @@ function CoachDashboard({ onLogout, adminEmail }) {
       skipEmptyLines: true,
       complete: (results) => {
         const rows = results.data.filter(r => r.nom && r.nom.trim());
-        const imported = rows.map((r, i) => ({
-          id: "imp-" + Date.now() + "-" + i,
-          name: r.nom.trim(),
-          flag: "🎾",
-          sex: (r.sexe || "M").trim().toUpperCase().startsWith("F") ? "F" : "M",
-          age: parseInt(r.age, 10) || 14,
-          form: 80, utr: r.utr || "", itf: "", classementFFT: r.classement_francais || "", tarifMensuel: parseFloat(r.tarif) || 0,
-          sleep: 7, hrv: 65, fatigue: "low", stress: "low", load: "optimale",
-          serviceTrend: 0, testToday: false,
-          objectifsMois: [], exercices: [],
-          session: {
-            time: r.heure_debut || "", end: r.heure_fin || "",
-            type: r.type || "Entraînement", court: r.court || "",
-            status: "entrainement", coach: r.coach || "", coachPhone: "",
-          },
-          focus: { axis: "", note: "" },
-          detail: mkDetail({ indice: 80 }),
-        }));
-        commit([...players, ...imported]);
-        setImportMsg(`${imported.length} joueur${imported.length > 1 ? "s" : ""} importé${imported.length > 1 ? "s" : ""} avec succès.`);
-        setTimeout(() => setImportMsg(null), 4000);
+        let nbMisAJour = 0, nbCrees = 0;
+        let nextPlayers = [...players];
+
+        rows.forEach((r, i) => {
+          const nomCsv = r.nom.trim();
+          const idxExistant = nextPlayers.findIndex(p => p.name.trim().toLowerCase() === nomCsv.toLowerCase());
+
+          if (idxExistant !== -1) {
+            // Joueur déjà présent : on met à jour son créneau (et le tarif/classement si précisés), sans dupliquer.
+            const existant = nextPlayers[idxExistant];
+            nextPlayers[idxExistant] = {
+              ...existant,
+              tarifMensuel: r.tarif ? (parseFloat(r.tarif) || existant.tarifMensuel) : existant.tarifMensuel,
+              classementFFT: r.classement_francais ? r.classement_francais.trim() : existant.classementFFT,
+              session: {
+                ...existant.session,
+                time: r.heure_debut || existant.session.time,
+                end: r.heure_fin || existant.session.end,
+                type: r.type || existant.session.type,
+                court: r.court || existant.session.court,
+                coach: r.coach || existant.session.coach,
+              },
+            };
+            nbMisAJour++;
+          } else {
+            // Pas de correspondance : nouveau joueur créé (comme avant).
+            nextPlayers.push({
+              id: "imp-" + Date.now() + "-" + i,
+              name: nomCsv,
+              flag: "🎾",
+              sex: (r.sexe || "M").trim().toUpperCase().startsWith("F") ? "F" : "M",
+              age: parseInt(r.age, 10) || 14,
+              form: 80, utr: r.utr || "", itf: "", classementFFT: r.classement_francais || "", tarifMensuel: parseFloat(r.tarif) || 0,
+              sleep: 7, hrv: 65, fatigue: "low", stress: "low", load: "optimale",
+              serviceTrend: 0, testToday: false,
+              objectifsMois: [], exercices: [],
+              session: {
+                time: r.heure_debut || "", end: r.heure_fin || "",
+                type: r.type || "Entraînement", court: r.court || "",
+                status: "entrainement", coach: r.coach || "", coachPhone: "",
+              },
+              focus: { axis: "", note: "" },
+              detail: mkDetail({ indice: 80 }),
+            });
+            nbCrees++;
+          }
+        });
+
+        commit(nextPlayers);
+        const parts = [];
+        if (nbMisAJour > 0) parts.push(`${nbMisAJour} mis à jour`);
+        if (nbCrees > 0) parts.push(`${nbCrees} créé${nbCrees > 1 ? "s" : ""}`);
+        setImportMsg(parts.length ? parts.join(" · ") : "Aucune ligne valide dans le fichier.");
+        setTimeout(() => setImportMsg(null), 5000);
       },
       error: () => setImportMsg("Erreur lors de la lecture du fichier CSV."),
     });
@@ -1201,21 +1333,7 @@ function CoachDashboard({ onLogout, adminEmail }) {
       .sort((a, b) => a.session.time.localeCompare(b.session.time)),
     [players]
   );
-  const facilityGroups = useMemo(() => {
-    const map = {};
-    players.forEach(p => {
-      if (!p.session || !p.session.court) return;
-      const key = p.session.court;
-      if (!map[key]) map[key] = [];
-      map[key].push(p);
-    });
-    const isSalle = (n) => /salle/i.test(n);
-    const extras = Object.keys(map).filter(n => !COURTS.includes(n) && !SALLES.includes(n));
-    const courtNames = [...COURTS, ...extras.filter(n => !isSalle(n))];
-    const salleNames = [...SALLES, ...extras.filter(n => isSalle(n))];
-    const build = (names) => names.map(name => ({ court: name, players: map[name] || [] }));
-    return { courts: build(courtNames), salles: build(salleNames) };
-  }, [players]);
+  const facilityGroups = useMemo(() => computeFacilityGroups(players), [players]);
   const occupied = [...facilityGroups.courts, ...facilityGroups.salles].filter(g => g.players.length > 0).length;
   const competitionPlayers = players.filter(p => p.session && p.session.status === "competition");
 
@@ -1240,7 +1358,7 @@ function CoachDashboard({ onLogout, adminEmail }) {
   if (activePlayer) {
     return (
       <div style={styles.shell}>
-        <Sidebar active="joueurs" onLogout={onLogout} adminEmail={adminEmail} />
+        <Sidebar active="joueurs" onLogout={onLogout} adminEmail={adminEmail} role={role} />
         <PlayerProfile player={activePlayer} onBack={() => setProfileId(null)} onEdit={() => setModal(activePlayer)} onSavePlayer={upsert} />
         {modal && (
           <PlayerModal initial={modal === "new" ? null : modal} onSave={upsert} onClose={() => setModal(null)} />
@@ -1251,13 +1369,13 @@ function CoachDashboard({ onLogout, adminEmail }) {
 
   return (
     <div style={styles.shell}>
-      <Sidebar active={view} onNavigate={navigate} onLogout={onLogout} adminEmail={adminEmail} />
+      <Sidebar active={view} onNavigate={navigate} onLogout={onLogout} adminEmail={adminEmail} role={role} />
 
       {view === "dashboard" && (
         <Cockpit
           players={players} analyzed={analyzed} priorities={priorities}
           competitionPlayers={competitionPlayers} facilityGroups={facilityGroups}
-          onOpenPlayer={openProfile} onGoPlanning={() => navigate("planning")} depenses={depenses} stages={stages}
+          onOpenPlayer={openProfile} onGoPlanning={() => navigate("planning")} depenses={depenses} stages={stages} role={role}
         />
       )}
 
@@ -1354,14 +1472,14 @@ function CoachDashboard({ onLogout, adminEmail }) {
       )}
 
       {view === "stages" && (
-        <StagesView stages={stages} onSave={commitStages} />
+        <StagesView stages={stages} onSave={commitStages} role={role} />
       )}
 
       {view === "stagiaires" && (
-        <StagiairesView stages={stages} onSaveStages={commitStages} />
+        <StagiairesView stages={stages} onSaveStages={commitStages} role={role} />
       )}
 
-      {view === "depenses" && (
+      {view === "depenses" && role === "admin" && (
         <DepensesView depenses={depenses} onSave={commitDepenses} players={players} stages={stages} categories={categories} onSaveCategories={commitCategories} />
       )}
 
@@ -1369,7 +1487,7 @@ function CoachDashboard({ onLogout, adminEmail }) {
         <JoueursView analyzed={analyzed} onOpen={openProfile} onEdit={(p) => setModal(p)} onDelete={remove} onAdd={() => setModal("new")} />
       )}
 
-      {view === "ia" && (
+      {view === "ia" && role === "admin" && (
         <AIAssistantView players={players} stages={stages} depenses={depenses} />
       )}
 
@@ -1427,7 +1545,7 @@ function Stat({ icon: Icon, label, value, sub, subColor, tint = T.green, onClick
   );
 }
 
-function StagesView({ stages, onSave }) {
+function StagesView({ stages, onSave, role }) {
   const [modal, setModal] = useState(null);
   const [selectedWeek, setSelectedWeek] = useState(null);
   const list = stages || [];
@@ -1500,7 +1618,7 @@ function StagesView({ stages, onSave }) {
         ) : (
           <div style={styles.stagesGrid}>
             {wkList.map(s => (
-              <StageCard key={s.id} s={s} onEdit={() => setModal(s)} onDelete={() => remove(s.id)} onParticipants={(ps) => setParticipants(s.id, ps)} />
+              <StageCard key={s.id} s={s} onEdit={() => setModal(s)} onDelete={() => remove(s.id)} onParticipants={(ps) => setParticipants(s.id, ps)} role={role} />
             ))}
           </div>
         )}
@@ -1802,6 +1920,12 @@ function DepensesView({ depenses, onSave, players, stages, categories, onSaveCat
           montant: parseFloat(String(r.montant).replace(",", ".")) || 0,
         }));
         onSave([...list, ...imported]);
+        // Toute catégorie inédite rencontrée dans le fichier est ajoutée automatiquement à la liste gérable.
+        if (onSaveCategories) {
+          const catsExistantes = categories && categories.length ? categories : DEPENSES_CATEGORIES_SEED;
+          const nouvelles = [...new Set(imported.map(d => d.categorie))].filter(c => !catsExistantes.includes(c));
+          if (nouvelles.length > 0) onSaveCategories([...catsExistantes, ...nouvelles]);
+        }
         setImportMsg(`${imported.length} ligne${imported.length > 1 ? "s" : ""} importée${imported.length > 1 ? "s" : ""}.`);
         setTimeout(() => setImportMsg(null), 4000);
       },
@@ -2181,7 +2305,7 @@ function agregerStagiaires(stages) {
   return result.sort((a, b) => (a.nom || "").localeCompare(b.nom || "") || (a.prenom || "").localeCompare(b.prenom || ""));
 }
 
-function StagiairesView({ stages, onSaveStages }) {
+function StagiairesView({ stages, onSaveStages, role }) {
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState(() => new Set());
   const [editing, setEditing] = useState(null);
@@ -2304,6 +2428,7 @@ function StagiairesView({ stages, onSaveStages }) {
       {editing && (
         <StagiaireContactModal
           stagiaire={editing}
+          role={role}
           onSave={(data) => saveContact(editing.cle, data)}
           onDelete={() => { deleteStagiaire(editing.cle); setEditing(null); }}
           onClose={() => setEditing(null)}
@@ -2315,7 +2440,7 @@ function StagiairesView({ stages, onSaveStages }) {
   );
 }
 
-function StagiaireContactModal({ stagiaire, onSave, onDelete, onClose }) {
+function StagiaireContactModal({ stagiaire, role, onSave, onDelete, onClose }) {
   const [email, setEmail] = useState(stagiaire.email || "");
   const [telephone, setTelephone] = useState(stagiaire.telephone || "");
   const [dateNaissance, setDateNaissance] = useState(stagiaire.dateNaissance || "");
@@ -2355,9 +2480,9 @@ function StagiaireContactModal({ stagiaire, onSave, onDelete, onClose }) {
           <div style={{ marginBottom: 10 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
               <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: T.dim }}>
-                Historique des stages & paiements ({stagiaire.stages.length})
+                Historique des stages{role !== "coach" ? " & paiements" : ""} ({stagiaire.stages.length})
               </div>
-              {(() => {
+              {role !== "coach" && (() => {
                 const totalDu = stagiaire.stages.reduce((a, st) => a + (st.montant || 0), 0);
                 const totalPaye = stagiaire.stages.filter(st => st.paye).reduce((a, st) => a + (st.montant || 0), 0);
                 const restant = totalDu - totalPaye;
@@ -2374,7 +2499,7 @@ function StagiaireContactModal({ stagiaire, onSave, onDelete, onClose }) {
                   <strong>{st.nom}</strong>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
                     {st.hebergement && <Home size={12} color={T.blue} />}
-                    {st.montant > 0 && (
+                    {role !== "coach" && st.montant > 0 && (
                       <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 7px", borderRadius: 12, background: st.paye ? `${T.green}18` : `${T.amber}18`, color: st.paye ? T.green : T.amber }}>
                         {st.paye ? "Payé" : "Non payé"} · €{st.montant.toLocaleString("fr-FR")}
                       </span>
@@ -2425,7 +2550,7 @@ function StagiaireContactModal({ stagiaire, onSave, onDelete, onClose }) {
   );
 }
 
-function StageCard({ s, onEdit, onDelete, onParticipants }) {
+function StageCard({ s, onEdit, onDelete, onParticipants, role }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ nom: "", classement: "" });
   const [editingIdx, setEditingIdx] = useState(null);
@@ -2499,10 +2624,12 @@ function StageCard({ s, onEdit, onDelete, onParticipants }) {
       )}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14 }}>
-        <div>
-          <div style={{ fontSize: 21, fontWeight: 800, color: T.green }}>{eur(ca)}</div>
-          <div style={{ fontSize: 11, color: T.dim }}>{eur(s.tarif || 0)} / joueur{s.hebergement && s.hebergementTarif ? ` · +${eur(s.hebergementTarif)} hébergement` : ""}</div>
-        </div>
+        {role !== "coach" ? (
+          <div>
+            <div style={{ fontSize: 21, fontWeight: 800, color: T.green }}>{eur(ca)}</div>
+            <div style={{ fontSize: 11, color: T.dim }}>{eur(s.tarif || 0)} / joueur{s.hebergement && s.hebergementTarif ? ` · +${eur(s.hebergementTarif)} hébergement` : ""}</div>
+          </div>
+        ) : <div />}
         <button style={styles.smallBtn} onClick={() => setOpen(!open)}><Users size={13} /> {open ? "Fermer" : "Remplir"}</button>
       </div>
 
@@ -2557,6 +2684,7 @@ function StageCard({ s, onEdit, onDelete, onParticipants }) {
           tarifStage={s.tarif || 0}
           hebergementTarif={s.hebergementTarif || 0}
           proposeHebergement={!!s.hebergement}
+          role={role}
           onSave={(data) => saveStagiaire(editingIdx, data)}
           onClose={() => setEditingIdx(null)}
         />
@@ -2565,7 +2693,7 @@ function StageCard({ s, onEdit, onDelete, onParticipants }) {
   );
 }
 
-function StagiaireModal({ stagiaire, stageNom, tarifStage, hebergementTarif, proposeHebergement, onSave, onClose }) {
+function StagiaireModal({ stagiaire, stageNom, tarifStage, hebergementTarif, proposeHebergement, role, onSave, onClose }) {
   const [f, setF] = useState({
     prenom: stagiaire.prenom || "",
     nom: stagiaire.nom || "",
@@ -2669,11 +2797,13 @@ Notes du coach à intégrer (ne rien inventer au-delà) :
               )}
             </>
           )}
-          <Field label={`Paiement — ${eur(montantDu)} dû pour ce stage`} full>
-            <button style={{ ...styles.toggle, ...(f.paye ? styles.toggleOn : {}) }} onClick={() => set("paye", !f.paye)}>
-              {f.paye ? "✓ Payé" : "Non payé"}
-            </button>
-          </Field>
+          {role !== "coach" && (
+            <Field label={`Paiement — ${eur(montantDu)} dû pour ce stage`} full>
+              <button style={{ ...styles.toggle, ...(f.paye ? styles.toggleOn : {}) }} onClick={() => set("paye", !f.paye)}>
+                {f.paye ? "✓ Payé" : "Non payé"}
+              </button>
+            </Field>
+          )}
 
           <div style={{ borderTop: `1px dashed ${T.border2}`, marginTop: 6, paddingTop: 16 }}>
             <div style={styles.objHeader}>Bilan du coach (à remplir en fin de stage)</div>
@@ -2781,7 +2911,7 @@ function StageModal({ initial, onSave, onClose }) {
   );
 }
 
-function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGroups, onOpenPlayer, onGoPlanning, depenses, stages }) {
+function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGroups, onOpenPlayer, onGoPlanning, depenses, stages, role }) {
   const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
   const joueurs = players.length;
   const seances = players.filter(p => p.session && p.session.time && p.session.status !== "competition").length;
@@ -2859,21 +2989,25 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
         <Stat icon={Trophy} label="En compétition" value={enComp} tint={T.blue} />
       </div>
 
-      {/* 2. Santé business */}
-      <div style={{ ...styles.ckSection, marginTop: 28 }}>
-        <div style={styles.ckTitle}>Santé business</div>
-        <span style={styles.ckNote}>CA & marge : chiffres réels de {MOIS_BUSINESS} · remplissage et impayés encore estimés</span>
-      </div>
-      <div style={styles.kpiRow}>
-        <Stat
-          icon={Euro} label={`CA · ${MOIS_BUSINESS}`} value={eur(caMois)}
-          sub={playersSansTarif > 0 ? `⚠️ ${playersSansTarif} joueur(s) sans tarif` : `${eur(revenuJoueurs)} joueurs + ${eur(revenuStages)} stages`}
-          subColor={playersSansTarif > 0 ? T.red : T.mute}
-        />
-        <Stat icon={Wallet} label={`Marge · ${MOIS_BUSINESS}`} value={eur(marge)} sub={caMois ? `${margePct}% du CA` : "—"} subColor={marge >= 0 ? T.green : T.red} tint={marge >= 0 ? T.green : T.red} />
-        <Stat icon={PieChart} label="Remplissage courts" value={`${remplissage}%`} sub={`${usedSlots}/${capacity} créneaux · estimé`} subColor={remplissage >= 75 ? T.green : T.amber} tint={remplissage >= 75 ? T.green : T.amber} />
-        <Stat icon={AlertTriangle} label="Impayés" value={eur(impayes)} sub={`${impayesN} joueur${impayesN > 1 ? "s" : ""} à relancer · estimé`} subColor={T.amber} tint={T.amber} />
-      </div>
+      {/* 2. Santé business (réservé à la direction) */}
+      {role === "admin" && (
+        <>
+          <div style={{ ...styles.ckSection, marginTop: 28 }}>
+            <div style={styles.ckTitle}>Santé business</div>
+            <span style={styles.ckNote}>CA & marge : chiffres réels de {MOIS_BUSINESS} · remplissage et impayés encore estimés</span>
+          </div>
+          <div style={styles.kpiRow}>
+            <Stat
+              icon={Euro} label={`CA · ${MOIS_BUSINESS}`} value={eur(caMois)}
+              sub={playersSansTarif > 0 ? `⚠️ ${playersSansTarif} joueur(s) sans tarif` : `${eur(revenuJoueurs)} joueurs + ${eur(revenuStages)} stages`}
+              subColor={playersSansTarif > 0 ? T.red : T.mute}
+            />
+            <Stat icon={Wallet} label={`Marge · ${MOIS_BUSINESS}`} value={eur(marge)} sub={caMois ? `${margePct}% du CA` : "—"} subColor={marge >= 0 ? T.green : T.red} tint={marge >= 0 ? T.green : T.red} />
+            <Stat icon={PieChart} label="Remplissage courts" value={`${remplissage}%`} sub={`${usedSlots}/${capacity} créneaux · estimé`} subColor={remplissage >= 75 ? T.green : T.amber} tint={remplissage >= 75 ? T.green : T.amber} />
+            <Stat icon={AlertTriangle} label="Impayés" value={eur(impayes)} sub={`${impayesN} joueur${impayesN > 1 ? "s" : ""} à relancer · estimé`} subColor={T.amber} tint={T.amber} />
+          </div>
+        </>
+      )}
 
       {/* 3. Performance sportive */}
       <div style={{ ...styles.ckSection, marginTop: 28 }}><div style={styles.ckTitle}>Performance sportive</div></div>
@@ -2906,34 +3040,38 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
         <Stat icon={UserMinus} label="Départs ce mois" value="1" sub="à surveiller" subColor={T.amber} tint={T.amber} />
       </div>
 
-      {/* 5. Rendement par coach (version compacte) */}
-      <div style={{ ...styles.ckSection, marginTop: 28 }}>
-        <div style={{ ...styles.ckTitle, fontSize: 12 }}>Rendement par coach</div>
-        <span style={{ ...styles.ckNote, fontSize: 11 }}>revenu des enfants gérés − prestation versée au coach</span>
-      </div>
-      <section style={{ ...styles.panel, padding: 10 }}>
-        {coachRendement.length === 0 ? (
-          <div style={{ ...styles.emptyPanel, fontSize: 12.5, padding: "16px 0" }}>Aucun coach assigné pour le moment.</div>
-        ) : coachRendement.map(c => (
-          <div key={c.name} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 6px", borderBottom: `1px solid ${T.border}` }}>
-            <span style={{ ...styles.avatarSm, background: `${T.green}18`, color: T.green, borderColor: `${T.green}33` }}>
-              {initials(c.name)}
-            </span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 600 }}>{c.name}</div>
-              <div style={{ fontSize: 10.5, color: T.mute, marginTop: 1 }}>
-                {c.nbEnfants} enfant{c.nbEnfants > 1 ? "s" : ""} · {eur(c.revenu)} générés · {eur(c.salaire)} versés
-              </div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 12.5, fontWeight: 800, color: c.rendement >= 0 ? T.green : T.red }}>
-                {c.rendement >= 0 ? "+" : ""}{eur(c.rendement)}
-              </div>
-              <div style={{ fontSize: 10, fontWeight: 700, color: T.mute, marginTop: 1 }}>{c.margePct}% de marge</div>
-            </div>
+      {/* 5. Rendement par coach (financier, réservé à la direction) */}
+      {role === "admin" && (
+        <>
+          <div style={{ ...styles.ckSection, marginTop: 28 }}>
+            <div style={{ ...styles.ckTitle, fontSize: 12 }}>Rendement par coach</div>
+            <span style={{ ...styles.ckNote, fontSize: 11 }}>revenu des enfants gérés − prestation versée au coach</span>
           </div>
-        ))}
-      </section>
+          <section style={{ ...styles.panel, padding: 10 }}>
+            {coachRendement.length === 0 ? (
+              <div style={{ ...styles.emptyPanel, fontSize: 12.5, padding: "16px 0" }}>Aucun coach assigné pour le moment.</div>
+            ) : coachRendement.map(c => (
+              <div key={c.name} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 6px", borderBottom: `1px solid ${T.border}` }}>
+                <span style={{ ...styles.avatarSm, background: `${T.green}18`, color: T.green, borderColor: `${T.green}33` }}>
+                  {initials(c.name)}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600 }}>{c.name}</div>
+                  <div style={{ fontSize: 10.5, color: T.mute, marginTop: 1 }}>
+                    {c.nbEnfants} enfant{c.nbEnfants > 1 ? "s" : ""} · {eur(c.revenu)} générés · {eur(c.salaire)} versés
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 800, color: c.rendement >= 0 ? T.green : T.red }}>
+                    {c.rendement >= 0 ? "+" : ""}{eur(c.rendement)}
+                  </div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: T.mute, marginTop: 1 }}>{c.margePct}% de marge</div>
+                </div>
+              </div>
+            ))}
+          </section>
+        </>
+      )}
 
       {/* 6. Priorités du jour (en bas) */}
       <div style={{ ...styles.ckSection, marginTop: 28 }}><div style={styles.ckTitle}>Priorités du jour</div></div>
@@ -3025,18 +3163,18 @@ function JoueursView({ analyzed, onOpen, onEdit, onDelete, onAdd }) {
   );
 }
 
-function Sidebar({ active = "dashboard", onNavigate, onLogout, adminEmail }) {
+function Sidebar({ active = "dashboard", onNavigate, onLogout, adminEmail, role }) {
   const nav = [
     { key: "dashboard", icon: LayoutDashboard, label: "Tableau de bord", nav: true },
     { key: "planning", icon: CalendarDays, label: "Planning", nav: true },
     { key: "joueurs", icon: UserRound, label: "Joueurs", nav: true },
     { key: "stages", icon: Tent, label: "Stages", nav: true },
     { key: "stagiaires", icon: UserPlus, label: "Stagiaires", nav: true },
-    { key: "depenses", icon: Wallet, label: "Tableau de bord financier", nav: true },
-    { key: "ia", icon: Sparkles, label: "Assistant IA", nav: true },
+    { key: "depenses", icon: Wallet, label: "Tableau de bord financier", nav: true, adminOnly: true },
+    { key: "ia", icon: Sparkles, label: "Assistant IA", nav: true, adminOnly: true },
     { key: "tests", icon: FlaskRound, label: "Tests & analyses", soon: true },
     { key: "alertes", icon: Bell, label: "Alertes", soon: true },
-  ].map(n => ({ ...n, active: n.key === active }));
+  ].filter(n => !n.adminOnly || role === "admin").map(n => ({ ...n, active: n.key === active }));
   return (
     <aside style={styles.sidebar}>
       <div style={styles.logo}>
@@ -3065,8 +3203,20 @@ function Sidebar({ active = "dashboard", onNavigate, onLogout, adminEmail }) {
 
       <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
         {adminEmail && (
-          <div style={{ fontSize: 11, color: T.dim, padding: "0 4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            Connecté : {adminEmail}
+          <div style={{ padding: "0 4px" }}>
+            <div style={{ fontSize: 11, color: T.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              Connecté : {adminEmail}
+            </div>
+            {role && (
+              <span style={{
+                display: "inline-block", marginTop: 4, fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase",
+                padding: "2px 8px", borderRadius: 20,
+                background: role === "admin" ? `${T.green}18` : `${T.blue}18`,
+                color: role === "admin" ? T.green : T.blue,
+              }}>
+                {role === "admin" ? "Direction" : "Coach"}
+              </span>
+            )}
           </div>
         )}
         {onLogout && (
