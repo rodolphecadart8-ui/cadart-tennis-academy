@@ -1988,22 +1988,39 @@ function DepensesView({ depenses, onSave, players, stages, categories, onSaveCat
     return uniq.sort((a, b) => moisSortKey(a) - moisSortKey(b)).pop();
   }, [list]);
 
-  // Une seule table, comme l'Excel d'origine : les catégories de recettes en tête,
-  // puis toutes les autres (dont "Prestations coachs") par ordre alphabétique.
-  const CATEGORIES_RECETTES = ["Aide apprentissage (État)", "Cotisations familles / adhérents", "Sponsoring"];
-  const categoriesOrdonnees = useMemo(() => {
+  // Deux blocs distincts, comme le fichier source : REVENUS puis DÉPENSES, chacun avec son sous-total.
+  const CATEGORIES_RECETTES = ["Aide apprentissage (État)", "Cotisations familles / adhérents", "Sponsoring", "Avances / remboursements Cadart"];
+  const categoriesRevenus = useMemo(() => {
     const toutes = [...new Set(list.map(d => d.categorie).filter(Boolean))];
-    const recettes = CATEGORIES_RECETTES.filter(c => toutes.includes(c));
-    const autres = toutes.filter(c => !CATEGORIES_RECETTES.includes(c)).sort((a, b) => a.localeCompare(b));
-    return [...recettes, ...autres];
+    return CATEGORIES_RECETTES.filter(c => toutes.includes(c));
+  }, [list]);
+  const categoriesDepenses = useMemo(() => {
+    const toutes = [...new Set(list.map(d => d.categorie).filter(Boolean))];
+    return toutes.filter(c => !CATEGORIES_RECETTES.includes(c)).sort((a, b) => a.localeCompare(b));
   }, [list]);
 
   const cellEntries = (categorie, mois, libelle) =>
     list.filter(d => d.categorie === categorie && d.mois === mois && (libelle === undefined || d.libelle === libelle));
   const cellValue = (categorie, mois, libelle) => cellEntries(categorie, mois, libelle).reduce((a, d) => a + (d.montant || 0), 0);
   const catTotal = (cat) => moisListe.reduce((a, m) => a + cellValue(cat, m), 0);
-  const moisResultatNet = (mois) => categoriesOrdonnees.reduce((a, c) => a + cellValue(c, mois), 0);
+  const moisTotalRevenus = (mois) => categoriesRevenus.reduce((a, c) => a + cellValue(c, mois), 0);
+  const moisTotalDepenses = (mois) => categoriesDepenses.reduce((a, c) => a + cellValue(c, mois), 0);
+  const grandTotalRevenus = moisListe.reduce((a, m) => a + moisTotalRevenus(m), 0);
+  const grandTotalDepenses = moisListe.reduce((a, m) => a + moisTotalDepenses(m), 0);
+  const moisResultatNet = (mois) => moisTotalRevenus(mois) + moisTotalDepenses(mois);
   const grandResultatNet = moisListe.reduce((a, m) => a + moisResultatNet(m), 0);
+
+  // Évolution du solde bancaire : cumul du bénéfice mois par mois, à partir d'un solde de départ éditable.
+  const [soldeDepart, setSoldeDepart] = useState(0);
+  const soldesParMois = useMemo(() => {
+    let solde = soldeDepart;
+    return moisListe.map(m => {
+      const debut = solde;
+      const fin = debut + moisResultatNet(m);
+      solde = fin;
+      return { mois: m, debut, fin };
+    });
+  }, [moisListe, soldeDepart, list]);
 
   // Table secondaire : coachs × mois (uniquement la catégorie "Prestations coachs")
   const coachs = useMemo(() => {
@@ -2118,7 +2135,11 @@ function DepensesView({ depenses, onSave, players, stages, categories, onSaveCat
                 </tr>
               </thead>
               <tbody>
-                {categoriesOrdonnees.map(cat => (
+                {/* Section REVENUS */}
+                <tr style={{ background: T.bg2 }}>
+                  <td style={{ ...rowLabelStyle, fontWeight: 800, background: T.bg2, letterSpacing: 0.4 }} colSpan={moisListe.length + 2}>REVENUS</td>
+                </tr>
+                {categoriesRevenus.map(cat => (
                   <tr key={cat} style={{ borderBottom: `1px solid ${T.border}` }}>
                     <td style={rowLabelStyle}>{cat}</td>
                     {moisListe.map(m => {
@@ -2132,11 +2153,73 @@ function DepensesView({ depenses, onSave, players, stages, categories, onSaveCat
                     <td style={cellStyle(catTotal(cat), true)}>{eurSigne(catTotal(cat))}</td>
                   </tr>
                 ))}
+                <tr style={{ borderBottom: `2px solid ${T.border2}` }}>
+                  <td style={{ ...rowLabelStyle, fontWeight: 800 }}>TOTAL REVENUS</td>
+                  {moisListe.map(m => <td key={m} style={cellStyle(moisTotalRevenus(m), true)}>{eurSigne(moisTotalRevenus(m))}</td>)}
+                  <td style={cellStyle(grandTotalRevenus, true)}>{eurSigne(grandTotalRevenus)}</td>
+                </tr>
+
+                {/* Section DÉPENSES */}
+                <tr style={{ background: T.bg2 }}>
+                  <td style={{ ...rowLabelStyle, fontWeight: 800, background: T.bg2, letterSpacing: 0.4 }} colSpan={moisListe.length + 2}>DÉPENSES</td>
+                </tr>
+                {categoriesDepenses.map(cat => (
+                  <tr key={cat} style={{ borderBottom: `1px solid ${T.border}` }}>
+                    <td style={rowLabelStyle}>{cat}</td>
+                    {moisListe.map(m => {
+                      const v = cellValue(cat, m);
+                      return (
+                        <td key={m} style={cellStyle(v)} onClick={() => setCellModal({ categorie: cat, mois: m })}>
+                          {eurSigne(v)}
+                        </td>
+                      );
+                    })}
+                    <td style={cellStyle(catTotal(cat), true)}>{eurSigne(catTotal(cat))}</td>
+                  </tr>
+                ))}
+                <tr style={{ borderBottom: `2px solid ${T.border2}` }}>
+                  <td style={{ ...rowLabelStyle, fontWeight: 800 }}>TOTAL DÉPENSES</td>
+                  {moisListe.map(m => <td key={m} style={cellStyle(moisTotalDepenses(m), true)}>{eurSigne(moisTotalDepenses(m))}</td>)}
+                  <td style={cellStyle(grandTotalDepenses, true)}>{eurSigne(grandTotalDepenses)}</td>
+                </tr>
+
                 <tr style={{ background: `${T.amber}14` }}>
-                  <td style={{ ...rowLabelStyle, fontWeight: 800, background: `${T.amber}14` }}>RÉSULTAT NET (Recettes − Dépenses)</td>
+                  <td style={{ ...rowLabelStyle, fontWeight: 800, background: `${T.amber}14` }}>BÉNÉFICE (Revenus − Dépenses)</td>
                   {moisListe.map(m => <td key={m} style={{ ...cellStyle(moisResultatNet(m), true), background: `${T.amber}14` }}>{eurSigne(moisResultatNet(m))}</td>)}
                   <td style={{ ...cellStyle(grandResultatNet, true), background: `${T.amber}14` }}>{eurSigne(grandResultatNet)}</td>
                 </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div style={styles.ckSection}>
+            <div style={styles.ckTitle}>Évolution du solde bancaire</div>
+            <span style={styles.ckNote}>solde de départ éditable · le reste se calcule automatiquement à partir du bénéfice mensuel</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+            <span style={{ fontSize: 12.5, color: T.mute }}>Solde au tout début (avant {moisListe[0]}) :</span>
+            <input
+              type="number" value={soldeDepart} onChange={(e) => setSoldeDepart(+e.target.value)}
+              style={{ ...styles.input, width: 130 }}
+            />
+          </div>
+          <div style={{ overflowX: "auto", border: `1px solid ${T.border}`, borderRadius: 12, marginBottom: 28 }}>
+            <table style={{ borderCollapse: "collapse", width: "100%" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                  <th style={{ ...rowLabelStyle, textAlign: "left", fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, color: T.dim }}>Mois</th>
+                  <th style={headStyle}>Solde début</th>
+                  <th style={headStyle}>Solde fin</th>
+                </tr>
+              </thead>
+              <tbody>
+                {soldesParMois.map(s => (
+                  <tr key={s.mois} style={{ borderBottom: `1px solid ${T.border}` }}>
+                    <td style={rowLabelStyle}>{s.mois}</td>
+                    <td style={cellStyle(s.debut)}>{eurSigne(s.debut)}</td>
+                    <td style={cellStyle(s.fin, true)}>{eurSigne(s.fin)}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -4367,6 +4450,9 @@ function generateBilanAnnuelPdf(depenses, stages, players) {
   const dList = depenses || [];
   const sList = stages || [];
   const pList = players || [];
+  // Même classification que le tableau à l'écran : ces catégories sont des recettes,
+  // même si un mois précis y est négatif (ex: une avance remboursée) — pas une classification par signe.
+  const CATEGORIES_RECETTES = ["Aide apprentissage (État)", "Cotisations familles / adhérents", "Sponsoring", "Avances / remboursements Cadart"];
 
   // Tous les mois connus : ceux qui ont des dépenses + ceux où un stage démarre
   const moisSet = new Set(dList.map(d => d.mois).filter(Boolean));
@@ -4377,8 +4463,8 @@ function generateBilanAnnuelPdf(depenses, stages, players) {
     const depMois = dList.filter(d => d.mois === m);
     const prestations = depMois.filter(d => d.categorie === "Prestations coachs").reduce((a, d) => a + (d.montant || 0), 0); // négatif
     const autresMois = depMois.filter(d => d.categorie !== "Prestations coachs");
-    const autresRecettes = autresMois.filter(d => (d.montant || 0) > 0).reduce((a, d) => a + d.montant, 0);
-    const autresDepenses = autresMois.filter(d => (d.montant || 0) < 0).reduce((a, d) => a + d.montant, 0); // négatif
+    const autresRecettes = autresMois.filter(d => CATEGORIES_RECETTES.includes(d.categorie)).reduce((a, d) => a + (d.montant || 0), 0);
+    const autresDepenses = autresMois.filter(d => !CATEGORIES_RECETTES.includes(d.categorie)).reduce((a, d) => a + (d.montant || 0), 0); // négatif
     const revenuStages = caStagesMois(sList, m);
     const solde = prestations + autresRecettes + autresDepenses + revenuStages;
     return { mois: m, prestations, autresRecettes, autresDepenses, revenuStages, solde };
