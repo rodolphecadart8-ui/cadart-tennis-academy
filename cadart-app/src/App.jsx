@@ -1989,7 +1989,7 @@ function DepensesView({ depenses, onSave, players, stages, categories, onSaveCat
   }, [list]);
 
   // Deux blocs distincts, comme le fichier source : REVENUS puis DÉPENSES, chacun avec son sous-total.
-  const CATEGORIES_RECETTES = ["Aide apprentissage (État)", "Cotisations familles / adhérents", "Sponsoring", "Avances / remboursements Cadart"];
+  const CATEGORIES_RECETTES = ["Aide apprentissage (État)", "Cotisations familles / adhérents", "Sponsoring", "Sponsoring (Amatch)", "Avances / remboursements Cadart"];
   const categoriesRevenus = useMemo(() => {
     const toutes = [...new Set(list.map(d => d.categorie).filter(Boolean))];
     return CATEGORIES_RECETTES.filter(c => toutes.includes(c));
@@ -2441,7 +2441,7 @@ function CategoriesModal({ categories, onSave, onClose }) {
 
 function DepenseModal({ initial, isNew, categories, onSave, onClose }) {
   const cats = categories && categories.length ? categories : DEPENSES_CATEGORIES_SEED;
-  const RECETTE_PAR_DEFAUT = ["Cotisations familles / adhérents", "Sponsoring", "Aide apprentissage (État)"];
+  const RECETTE_PAR_DEFAUT = ["Cotisations familles / adhérents", "Sponsoring", "Sponsoring (Amatch)", "Aide apprentissage (État)", "Avances / remboursements Cadart"];
   const [f, setF] = useState(initial || {
     id: "dep" + Date.now(), mois: moisLabelNow(), categorie: cats[0], libelle: "", montant: 0,
   });
@@ -4483,7 +4483,7 @@ function generateBilanAnnuelPdf(depenses, stages, players) {
   const pList = players || [];
   // Même classification que le tableau à l'écran : ces catégories sont des recettes,
   // même si un mois précis y est négatif (ex: une avance remboursée) — pas une classification par signe.
-  const CATEGORIES_RECETTES = ["Aide apprentissage (État)", "Cotisations familles / adhérents", "Sponsoring", "Avances / remboursements Cadart"];
+  const CATEGORIES_RECETTES = ["Aide apprentissage (État)", "Cotisations familles / adhérents", "Sponsoring", "Sponsoring (Amatch)", "Avances / remboursements Cadart"];
 
   // Tous les mois connus : ceux qui ont des dépenses + ceux où un stage démarre
   const moisSet = new Set(dList.map(d => d.mois).filter(Boolean));
