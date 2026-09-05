@@ -2044,6 +2044,23 @@ function DepensesView({ depenses, onSave, players, stages, categories, onSaveCat
   };
   const remove = (id) => onSave(list.filter(x => x.id !== id));
 
+  // Répare les doublons créés par un import répété : si plusieurs lignes ont exactement le même
+  // mois + catégorie + libellé + montant, on n'en garde qu'une seule.
+  const nettoyerDoublons = () => {
+    const vus = new Set();
+    const nettoye = [];
+    let nbSupprimes = 0;
+    list.forEach(d => {
+      const k = `${d.mois}|||${d.categorie}|||${d.libelle}|||${d.montant}`.toLowerCase();
+      if (vus.has(k)) { nbSupprimes++; return; }
+      vus.add(k);
+      nettoye.push(d);
+    });
+    onSave(nettoye);
+    setImportMsg(nbSupprimes > 0 ? `${nbSupprimes} doublon${nbSupprimes > 1 ? "s" : ""} supprimé${nbSupprimes > 1 ? "s" : ""}.` : "Aucun doublon trouvé.");
+    setTimeout(() => setImportMsg(null), 4000);
+  };
+
   const handleImportCSV = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
@@ -2052,22 +2069,33 @@ function DepensesView({ depenses, onSave, players, stages, categories, onSaveCat
       skipEmptyLines: true,
       complete: (results) => {
         const rows = results.data.filter(r => r.mois && r.categorie && r.montant);
-        const imported = rows.map((r, i) => ({
-          id: "imp" + Date.now() + "-" + i,
-          mois: r.mois.trim(),
-          categorie: r.categorie.trim(),
-          libelle: (r.libelle || r.categorie).trim(),
-          montant: parseFloat(String(r.montant).replace(",", ".")) || 0,
-        }));
-        onSave([...list, ...imported]);
+        const cle = (mois, categorie, libelle) => `${mois}|||${categorie}|||${libelle}`.toLowerCase();
+        // On part de la liste actuelle, et pour chaque ligne du fichier : si une ligne avec le même
+        // mois + catégorie + libellé existe déjà, on la REMPLACE (pas de doublon) ; sinon on l'ajoute.
+        let next = [...list];
+        let nbRemplaces = 0, nbAjoutes = 0;
+        rows.forEach((r, i) => {
+          const mois = r.mois.trim(), categorie = r.categorie.trim(), libelle = (r.libelle || r.categorie).trim();
+          const montant = parseFloat(String(r.montant).replace(",", ".")) || 0;
+          const k = cle(mois, categorie, libelle);
+          const idxExistant = next.findIndex(d => cle(d.mois, d.categorie, d.libelle) === k);
+          if (idxExistant !== -1) {
+            next[idxExistant] = { ...next[idxExistant], montant };
+            nbRemplaces++;
+          } else {
+            next.push({ id: "imp" + Date.now() + "-" + i, mois, categorie, libelle, montant });
+            nbAjoutes++;
+          }
+        });
+        onSave(next);
         // Toute catégorie inédite rencontrée dans le fichier est ajoutée automatiquement à la liste gérable.
         if (onSaveCategories) {
           const catsExistantes = categories && categories.length ? categories : DEPENSES_CATEGORIES_SEED;
-          const nouvelles = [...new Set(imported.map(d => d.categorie))].filter(c => !catsExistantes.includes(c));
+          const nouvelles = [...new Set(rows.map(r => r.categorie.trim()))].filter(c => !catsExistantes.includes(c));
           if (nouvelles.length > 0) onSaveCategories([...catsExistantes, ...nouvelles]);
         }
-        setImportMsg(`${imported.length} ligne${imported.length > 1 ? "s" : ""} importée${imported.length > 1 ? "s" : ""}.`);
-        setTimeout(() => setImportMsg(null), 4000);
+        setImportMsg(`${nbAjoutes} ligne${nbAjoutes > 1 ? "s" : ""} ajoutée${nbAjoutes > 1 ? "s" : ""}, ${nbRemplaces} mise${nbRemplaces > 1 ? "s" : ""} à jour (aucun doublon créé).`);
+        setTimeout(() => setImportMsg(null), 5000);
       },
       error: () => setImportMsg("Erreur lors de la lecture du fichier CSV."),
     });
@@ -2110,6 +2138,9 @@ function DepensesView({ depenses, onSave, players, stages, categories, onSaveCat
             <FileDown size={15} /> Bilan annuel (PDF)
           </button>
           <button style={styles.ghostBtn} onClick={() => setShowCategories(true)}><Pencil size={15} /> Gérer les catégories</button>
+          <button style={{ ...styles.ghostBtn, color: T.amber, borderColor: `${T.amber}55` }} onClick={nettoyerDoublons} title="Supprime les lignes strictement identiques (même mois, catégorie, libellé et montant)">
+            <AlertTriangle size={15} /> Nettoyer les doublons
+          </button>
           <button style={styles.primaryBtn} onClick={() => setModal({ id: "dep" + Date.now(), mois: dernierMoisAvecDonnee, categorie: categories[0], libelle: "", montant: 0 })}><Plus size={16} /> Nouvelle dépense</button>
         </div>
       </header>
