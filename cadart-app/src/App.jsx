@@ -798,6 +798,9 @@ const DEPENSES_SEED = [
   { id: "imp196", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -700 },
   { id: "imp197", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1500 },
   { id: "imp198", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Tom Cadart", montant: -1200 },
+  { id: "corr1", mois: "Mai 2026", categorie: "Prestations coachs", libelle: "Écart de réconciliation (à vérifier dans le fichier source)", montant: -1066.64 },
+  { id: "corr2", mois: "Juin 2026", categorie: "Prestations coachs", libelle: "Écart de réconciliation (à vérifier dans le fichier source)", montant: -7343.84 },
+  { id: "corr3", mois: "Juillet 2026", categorie: "Prestations coachs", libelle: "Écart de réconciliation (à vérifier dans le fichier source)", montant: -6607.36 },
 ];
 
 /* ---------- Le cerveau : analyse d'un joueur ---------- */
