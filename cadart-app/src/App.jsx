@@ -56,24 +56,37 @@ const COURTS = ["Court 1", "Court 2", "Court 3", "Court 4", "Court 5"];
 const SALLES = ["Salle physique 1", "Salle physique 2"];
 /* Regroupe les joueurs par court/salle occupé — utilisé par le Planning (admin/coach) et
    par l'espace joueur, qui a lui aussi accès au planning complet. */
+const COURTS_LOWER = COURTS.map(c => c.toLowerCase());
+const SALLES_LOWER = SALLES.map(s => s.toLowerCase());
 function computeFacilityGroups(players, jour) {
-  const map = {};
+  // Regroupement insensible à la casse et aux espaces superflus : "Court 4", "court 4" et
+  // " Court 4 " pointent tous vers la même carte, pour éviter les doublons de terrain.
+  const map = {}; // clé = nom normalisé (minuscule, sans espaces en trop) → { name, players }
   (players || []).forEach(p => {
     sessionsAujourdHui(p, jour).forEach(s => {
-      if (!s || !s.court) return;
-      const key = s.court;
-      if (!map[key]) map[key] = [];
+      if (!s || !s.court || !s.court.trim()) return;
+      const raw = s.court.trim();
+      const lower = raw.toLowerCase();
+      // Si ce nom correspond (insensible à la casse) à un court/salle officiel, on utilise
+      // l'orthographe officielle pour l'affichage ; sinon on garde la première orthographe rencontrée.
+      const idxCourt = COURTS_LOWER.indexOf(lower);
+      const idxSalle = SALLES_LOWER.indexOf(lower);
+      const displayName = idxCourt !== -1 ? COURTS[idxCourt] : idxSalle !== -1 ? SALLES[idxSalle] : raw;
+      const key = displayName.toLowerCase();
+      if (!map[key]) map[key] = { name: displayName, players: [] };
       // "Joueur virtuel" portant CETTE séance précise en tant que p.session (singulier) —
       // permet à tous les composants d'affichage existants (CourtCard, etc.) de continuer
       // à fonctionner sans changement, même si le joueur a plusieurs séances dans la journée.
-      map[key].push({ ...p, session: s });
+      map[key].players.push({ ...p, session: s });
     });
   });
   const isSalle = (n) => /salle/i.test(n);
-  const extras = Object.keys(map).filter(n => !COURTS.includes(n) && !SALLES.includes(n));
-  const courtNames = [...COURTS, ...extras.filter(n => !isSalle(n))];
-  const salleNames = [...SALLES, ...extras.filter(n => isSalle(n))];
-  const build = (names) => names.map(name => ({ court: name, players: map[name] || [] }));
+  const knownKeys = new Set([...COURTS_LOWER, ...SALLES_LOWER]);
+  const extraKeys = Object.keys(map).filter(k => !knownKeys.has(k));
+  const extraNames = extraKeys.map(k => map[k].name);
+  const courtNames = [...COURTS, ...extraNames.filter(n => !isSalle(n))];
+  const salleNames = [...SALLES, ...extraNames.filter(n => isSalle(n))];
+  const build = (names) => names.map(name => ({ court: name, players: (map[name.toLowerCase()] || { players: [] }).players }));
   return { courts: build(courtNames), salles: build(salleNames) };
 }
 
@@ -489,6 +502,12 @@ function sessionsOf(p) {
    plusieurs fois. Une séance sans jour précisé (tableau vide, ou anciennes fiches avec juste
    "jour" au singulier) est traitée comme "tous les jours", pour ne rien casser de l'existant. */
 const JOURS_SEMAINE = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
+/* "8:30" → 510, pour trier les créneaux chronologiquement (un tri texte classerait "13:15" avant "8:30"). */
+function timeToMinutes(t) {
+  if (!t || t === "—") return 9999;
+  const [h, m] = t.split(":").map(n => parseInt(n, 10) || 0);
+  return h * 60 + m;
+}
 function jourAujourdHui() {
   const jour = new Date().toLocaleDateString("fr-FR", { weekday: "long" });
   return jour.charAt(0).toUpperCase() + jour.slice(1);
@@ -1042,7 +1061,7 @@ function TVCourtCard({ group, kind }) {
     if (!slotsMap[key]) slotsMap[key] = [];
     slotsMap[key].push(p);
   });
-  const slots = Object.entries(slotsMap).sort((a, b) => a[0].localeCompare(b[0]));
+  const slots = Object.entries(slotsMap).sort((a, b) => timeToMinutes(a[0]) - timeToMinutes(b[0]));
   return (
     <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, padding: 18, minHeight: 140 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
@@ -3864,7 +3883,8 @@ function CourtCard({ group, onEdit, kind }) {
     if (!slotsMap[key]) slotsMap[key] = [];
     slotsMap[key].push(p);
   });
-  const slots = Object.entries(slotsMap).sort((a, b) => a[0].localeCompare(b[0]));
+  // Tri chronologique (8:30 avant 13:15) — un tri texte classerait "13:15" avant "8:30".
+  const slots = Object.entries(slotsMap).sort((a, b) => timeToMinutes(a[0]) - timeToMinutes(b[0]));
   return (
     <div style={{ ...styles.courtCard, ...(empty ? styles.courtCardEmpty : {}) }}>
       <div style={styles.courtHead}>
