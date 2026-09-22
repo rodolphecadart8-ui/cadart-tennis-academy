@@ -484,19 +484,24 @@ function sessionsOf(p) {
   if (p.session) return [p.session];
   return [];
 }
-/* Chaque séance porte désormais un champ "jour" (Lundi…Dimanche), pour un planning
-   récurrent sur toute la semaine. Une séance sans jour précisé (anciennes fiches) est
-   traitée comme "tous les jours", pour ne rien casser des plannings déjà en place. */
+/* Chaque séance porte un champ "jours" (tableau, ex: ["Lundi","Mercredi","Vendredi"]) pour
+   un planning récurrent sur plusieurs jours à la fois, sans avoir à ressaisir la même séance
+   plusieurs fois. Une séance sans jour précisé (tableau vide, ou anciennes fiches avec juste
+   "jour" au singulier) est traitée comme "tous les jours", pour ne rien casser de l'existant. */
 const JOURS_SEMAINE = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 function jourAujourdHui() {
   const jour = new Date().toLocaleDateString("fr-FR", { weekday: "long" });
   return jour.charAt(0).toUpperCase() + jour.slice(1);
 }
-/* Séances à afficher aujourd'hui (Planning, tableau de bord, TV…) : celles du jour
-   précisé, plus celles sans jour précisé (compatibilité avec l'existant). */
+function sessionMatchesJour(s, jour) {
+  if (s.jours && s.jours.length) return s.jours.includes(jour);
+  if (s.jour) return s.jour === jour; // compatibilité avec l'ancien champ au singulier
+  return true; // aucun jour précisé = tous les jours
+}
+/* Séances à afficher aujourd'hui (Planning, tableau de bord, TV…). */
 function sessionsAujourdHui(p) {
   const today = jourAujourdHui();
-  return sessionsOf(p).filter(s => !s.jour || s.jour === today);
+  return sessionsOf(p).filter(s => sessionMatchesJour(s, today));
 }
 function codeFromId(id) {
   let hash = 0;
@@ -4086,7 +4091,7 @@ function PlayerModal({ initial, onSave, onClose }) {
       name: "", flag: "🎾", sex: "M", age: 16, form: 85,
       sleep: 8, hrv: 70, fatigue: "low", stress: "low", load: "optimale",
       serviceTrend: 0, testToday: false,
-      sessions: [{ id: "sess1", time: "", end: "", type: "", court: "", status: "entrainement", coach: "Rodolphe", coachPhone: "" }],
+      sessions: [{ id: "sess1", jours: [], time: "", end: "", type: "", court: "", status: "entrainement", coach: "Rodolphe", coachPhone: "" }],
       utr: "", itf: "", classementFFT: "", tarifMensuel: 0, codeAcces: codeFromId(newId),
       objectifsMois: ["", ""], exercices: [],
       focus: { axis: "", note: "" },
@@ -4098,12 +4103,12 @@ function PlayerModal({ initial, onSave, onClose }) {
       objectifsMois: base.objectifsMois || (base.objectifMois ? [base.objectifMois, ""] : ["", ""]),
       codeAcces: base.codeAcces || codeFromId(base.id),
       // Compatibilité : anciennes fiches avec un seul p.session → basculées en tableau à l'ouverture.
-      sessions: (base.sessions && base.sessions.length) ? base.sessions : (base.session ? [{ id: "sess1", ...base.session }] : [{ id: "sess1", time: "", end: "", type: "", court: "", status: "entrainement", coach: "Rodolphe", coachPhone: "" }]),
+      sessions: (base.sessions && base.sessions.length) ? base.sessions : (base.session ? [{ id: "sess1", ...base.session }] : [{ id: "sess1", jours: [], time: "", end: "", type: "", court: "", status: "entrainement", coach: "Rodolphe", coachPhone: "" }]),
     };
   });
   const set = (k, v) => setF({ ...f, [k]: v });
   const setSession = (idx, k, v) => setF({ ...f, sessions: f.sessions.map((s, i) => (i === idx ? { ...s, [k]: v } : s)) });
-  const addSession = () => setF({ ...f, sessions: [...f.sessions, { id: "sess" + Date.now(), jour: "", time: "", end: "", type: "", court: "", status: "entrainement", coach: f.sessions[0] ? f.sessions[0].coach : "Rodolphe", coachPhone: "" }] });
+  const addSession = () => setF({ ...f, sessions: [...f.sessions, { id: "sess" + Date.now(), jours: [], time: "", end: "", type: "", court: "", status: "entrainement", coach: f.sessions[0] ? f.sessions[0].coach : "Rodolphe", coachPhone: "" }] });
   const removeSession = (idx) => setF({ ...f, sessions: f.sessions.filter((_, i) => i !== idx) });
   const setFocus = (k, v) => setF({ ...f, focus: { ...f.focus, [k]: v } });
   const setObj = (i, v) => {
@@ -4235,17 +4240,41 @@ function PlayerModal({ initial, onSave, onClose }) {
                   <button style={styles.iconBtn} onClick={() => removeSession(idx)} title="Supprimer cette séance"><Trash2 size={13} /></button>
                 )}
               </div>
+              <Field label="Jour(s) — coche tout ce qui s'applique" full>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+                  {JOURS_SEMAINE.map(j => {
+                    const actif = (s.jours || []).includes(j);
+                    return (
+                      <button
+                        key={j} type="button"
+                        onClick={() => {
+                          const cur = s.jours || [];
+                          setSession(idx, "jours", actif ? cur.filter(x => x !== j) : [...cur, j]);
+                        }}
+                        style={{
+                          padding: "6px 11px", borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                          border: `1px solid ${actif ? T.green : T.border2}`,
+                          background: actif ? T.greenGlow : "transparent",
+                          color: actif ? T.green : T.mute,
+                        }}
+                      >
+                        {j.slice(0, 3)}
+                      </button>
+                    );
+                  })}
+                  <span style={{ width: 1, height: 18, background: T.border2, margin: "0 2px" }} />
+                  <button type="button" style={{ ...styles.smallBtn, padding: "5px 10px" }} onClick={() => setSession(idx, "jours", ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"])}>Semaine</button>
+                  <button type="button" style={{ ...styles.smallBtn, padding: "5px 10px" }} onClick={() => setSession(idx, "jours", [])}>Tous les jours</button>
+                </div>
+              </Field>
               <div style={styles.grid3}>
-                <Field label="Jour">
-                  <Select value={s.jour || ""} onChange={(v) => setSession(idx, "jour", v)}
-                    options={[["", "Tous les jours"], ...JOURS_SEMAINE.map(j => [j, j])]} />
-                </Field>
                 <Field label="Heure de début">
                   <input style={styles.input} value={s.time} placeholder="15:00" onChange={(e) => setSession(idx, "time", e.target.value)} />
                 </Field>
                 <Field label="Heure de fin">
                   <input style={styles.input} value={s.end || ""} placeholder="16:30" onChange={(e) => setSession(idx, "end", e.target.value)} />
                 </Field>
+                <div />
               </div>
               <div style={styles.grid3}>
                 <Field label="Type de séance">
