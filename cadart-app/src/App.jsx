@@ -56,10 +56,10 @@ const COURTS = ["Court 1", "Court 2", "Court 3", "Court 4", "Court 5"];
 const SALLES = ["Salle physique 1", "Salle physique 2"];
 /* Regroupe les joueurs par court/salle occupé — utilisé par le Planning (admin/coach) et
    par l'espace joueur, qui a lui aussi accès au planning complet. */
-function computeFacilityGroups(players) {
+function computeFacilityGroups(players, jour) {
   const map = {};
   (players || []).forEach(p => {
-    sessionsAujourdHui(p).forEach(s => {
+    sessionsAujourdHui(p, jour).forEach(s => {
       if (!s || !s.court) return;
       const key = s.court;
       if (!map[key]) map[key] = [];
@@ -498,10 +498,10 @@ function sessionMatchesJour(s, jour) {
   if (s.jour) return s.jour === jour; // compatibilité avec l'ancien champ au singulier
   return true; // aucun jour précisé = tous les jours
 }
-/* Séances à afficher aujourd'hui (Planning, tableau de bord, TV…). */
-function sessionsAujourdHui(p) {
-  const today = jourAujourdHui();
-  return sessionsOf(p).filter(s => sessionMatchesJour(s, today));
+/* Séances d'un jour donné (par défaut aujourd'hui) — utilisé pour le tableau de bord (toujours
+   aujourd'hui) et pour l'onglet Planning, qui permet de choisir n'importe quel jour à visualiser. */
+function sessionsAujourdHui(p, jour) {
+  return sessionsOf(p).filter(s => sessionMatchesJour(s, jour || jourAujourdHui()));
 }
 function codeFromId(id) {
   let hash = 0;
@@ -1241,7 +1241,8 @@ function PlayerPortal({ playerId, onLogout }) {
     setPlayers(next);
     savePlayers(next);
   };
-  const facilityGroups = computeFacilityGroups(players);
+  const [selectedJourPortail, setSelectedJourPortail] = useState(jourAujourdHui());
+  const facilityGroups = computeFacilityGroups(players, selectedJourPortail);
 
   return (
     <div style={styles.shell}>
@@ -1294,6 +1295,21 @@ function PlayerPortal({ playerId, onLogout }) {
               <div style={styles.sub}>Vue d'ensemble des courts et salles physiques</div>
             </div>
           </header>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }}>
+            {JOURS_SEMAINE.map(j => (
+              <button
+                key={j} onClick={() => setSelectedJourPortail(j)}
+                style={{
+                  padding: "8px 16px", borderRadius: 20, fontSize: 13, fontWeight: 700, cursor: "pointer",
+                  border: `1px solid ${j === selectedJourPortail ? T.green : T.border2}`,
+                  background: j === selectedJourPortail ? T.greenGlow : "transparent",
+                  color: j === selectedJourPortail ? T.green : T.mute,
+                }}
+              >
+                {j}{j === jourAujourdHui() ? " · aujourd'hui" : ""}
+              </button>
+            ))}
+          </div>
           <div style={styles.ckSection}><div style={styles.ckTitle}>Courts</div></div>
           <div style={{ ...styles.facilityRow, gridTemplateColumns: `repeat(${facilityGroups.courts.length}, minmax(0, 1fr))` }}>
             {facilityGroups.courts.map(g => <CourtCard key={g.court} group={g} onEdit={() => {}} />)}
@@ -1498,6 +1514,10 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
   }, [players]);
   const facilityGroups = useMemo(() => computeFacilityGroups(players), [players]);
   const occupied = [...facilityGroups.courts, ...facilityGroups.salles].filter(g => g.players.length > 0).length;
+  // Onglet Planning : jour choisi librement (le tableau de bord ci-dessus, lui, reste toujours sur aujourd'hui).
+  const [selectedJourPlanning, setSelectedJourPlanning] = useState(jourAujourdHui());
+  const facilityGroupsPlanning = useMemo(() => computeFacilityGroups(players, selectedJourPlanning), [players, selectedJourPlanning]);
+  const occupiedPlanning = [...facilityGroupsPlanning.courts, ...facilityGroupsPlanning.salles].filter(g => g.players.length > 0).length;
   const competitionPlayers = useMemo(
     () => players
       .map(p => ({ ...p, session: sessionsAujourdHui(p).find(s => s.status === "competition") }))
@@ -1553,7 +1573,7 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
         <header style={styles.header}>
           <div>
             <div style={styles.h1}>Planning de la journée</div>
-            <div style={styles.sub}>{todayLabel()} · Rodolphe Cadart, Directeur</div>
+            <div style={styles.sub}>{selectedJourPlanning}{selectedJourPlanning === jourAujourdHui() ? " (aujourd'hui)" : ""} · Rodolphe Cadart, Directeur</div>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <button style={styles.ghostBtn} onClick={() => setShowReminders(true)} title="Rappels SMS aux coachs">
@@ -1578,6 +1598,22 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
           </div>
         </header>
 
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }}>
+          {JOURS_SEMAINE.map(j => (
+            <button
+              key={j} onClick={() => setSelectedJourPlanning(j)}
+              style={{
+                padding: "8px 16px", borderRadius: 20, fontSize: 13, fontWeight: 700, cursor: "pointer",
+                border: `1px solid ${j === selectedJourPlanning ? T.green : T.border2}`,
+                background: j === selectedJourPlanning ? T.greenGlow : "transparent",
+                color: j === selectedJourPlanning ? T.green : T.mute,
+              }}
+            >
+              {j}{j === jourAujourdHui() ? " · aujourd'hui" : ""}
+            </button>
+          ))}
+        </div>
+
         {importMsg && (
           <div style={{ background: `${T.green}14`, border: `1px solid ${T.green}44`, color: T.green, borderRadius: 10, padding: "10px 14px", fontSize: 13, fontWeight: 600, marginBottom: 16 }}>
             {importMsg}
@@ -1599,16 +1635,16 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
                 <div style={styles.heroSub}>Qui s'entraîne où, avec quel objectif et quels exercices</div>
               </div>
             </div>
-            <span style={styles.heroBadge}>{occupied} occupé{occupied > 1 ? "s" : ""}</span>
+            <span style={styles.heroBadge}>{occupiedPlanning} occupé{occupiedPlanning > 1 ? "s" : ""}</span>
           </div>
 
-          <div style={{ ...styles.facilityRow, gridTemplateColumns: `repeat(${facilityGroups.courts.length}, minmax(0, 1fr))` }}>
-            {facilityGroups.courts.map(g => <CourtCard key={g.court} group={g} onEdit={openProfile} />)}
+          <div style={{ ...styles.facilityRow, gridTemplateColumns: `repeat(${facilityGroupsPlanning.courts.length}, minmax(0, 1fr))` }}>
+            {facilityGroupsPlanning.courts.map(g => <CourtCard key={g.court} group={g} onEdit={openProfile} />)}
           </div>
 
           <div style={styles.salleLabel}>Salles physiques</div>
-          <div style={{ ...styles.facilityRow, gridTemplateColumns: `repeat(${facilityGroups.salles.length}, minmax(0, 1fr))` }}>
-            {facilityGroups.salles.map(g => <CourtCard key={g.court} group={g} onEdit={openProfile} kind="salle" />)}
+          <div style={{ ...styles.facilityRow, gridTemplateColumns: `repeat(${facilityGroupsPlanning.salles.length}, minmax(0, 1fr))` }}>
+            {facilityGroupsPlanning.salles.map(g => <CourtCard key={g.court} group={g} onEdit={openProfile} kind="salle" />)}
           </div>
 
           {competitionPlayers.length > 0 && (
