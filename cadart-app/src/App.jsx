@@ -1674,6 +1674,7 @@ function Stat({ icon: Icon, label, value, sub, subColor, tint = T.green, onClick
 function StagesView({ stages, onSave, role }) {
   const [modal, setModal] = useState(null);
   const [selectedWeek, setSelectedWeek] = useState(null);
+  const [toutesLesSemaines, setToutesLesSemaines] = useState(false);
   const list = stages || [];
   const upsert = (s) => {
     const ex = list.some(x => x.id === s.id);
@@ -1693,7 +1694,9 @@ function StagesView({ stages, onSave, role }) {
     if (!weeksMap[key]) weeksMap[key] = { ...info, key, stages: [] };
     weeksMap[key].stages.push(s);
   });
-  const weeks = Object.values(weeksMap).sort((a, b) => (a.monthYear - b.monthYear) || (a.monthIndex - b.monthIndex) || (a.week - b.week));
+  const weeksToutes = Object.values(weeksMap).sort((a, b) => (a.monthYear - b.monthYear) || (a.monthIndex - b.monthIndex) || (a.week - b.week));
+  const weekAUnStagiaire = (w) => w.stages.some(s => (s.participants || []).length > 0);
+  const weeks = toutesLesSemaines ? weeksToutes : weeksToutes.filter(weekAUnStagiaire);
 
   // Regroupement des semaines par mois, pour l'affichage avec démarcation
   const monthGroups = [];
@@ -1770,10 +1773,23 @@ function StagesView({ stages, onSave, role }) {
         <Stat icon={Users} label="Inscrits" value={totalInscrits} />
       </div>
 
-      <div style={styles.ckSection}><div style={styles.ckTitle}>Par mois</div><span style={styles.ckNote}>choisis une semaine pour voir ses stages</span></div>
+      <div style={styles.ckSection}>
+        <div style={styles.ckTitle}>Par mois</div>
+        <span style={styles.ckNote}>choisis une semaine pour voir ses stages</span>
+        <button
+          style={{ ...styles.ghostBtn, marginLeft: "auto", fontSize: 12 }}
+          onClick={() => setToutesLesSemaines(!toutesLesSemaines)}
+        >
+          {toutesLesSemaines ? "N'afficher que les semaines avec stagiaires" : "Afficher toutes les semaines"}
+        </button>
+      </div>
 
       {monthGroups.length === 0 ? (
-        <div style={styles.emptyPanel}>Aucun stage pour l'instant. Crée ton premier « super stage » 🎾</div>
+        <div style={styles.emptyPanel}>
+          {toutesLesSemaines
+            ? "Aucun stage pour l'instant. Crée ton premier « super stage » 🎾"
+            : "Aucune semaine avec des stagiaires inscrits pour l'instant."}
+        </div>
       ) : (
         monthGroups.map(g => (
           <div key={g.key}>
@@ -2064,6 +2080,17 @@ function DepensesView({ depenses, onSave, players, stages, categories, onSaveCat
     setTimeout(() => setImportMsg(null), 4000);
   };
 
+  // Supprime toutes les lignes d'une catégorie donnée — pratique pour repartir propre
+  // avant un réimport, sans risque de doublon résiduel d'un ancien import.
+  const [confirmViderCat, setConfirmViderCat] = useState(null);
+  const viderCategorie = (cat) => {
+    const nb = list.filter(d => d.categorie === cat).length;
+    onSave(list.filter(d => d.categorie !== cat));
+    setConfirmViderCat(null);
+    setImportMsg(`${nb} ligne${nb > 1 ? "s" : ""} supprimée${nb > 1 ? "s" : ""} pour « ${cat} ».`);
+    setTimeout(() => setImportMsg(null), 4000);
+  };
+
   const handleImportCSV = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
@@ -2143,6 +2170,9 @@ function DepensesView({ depenses, onSave, players, stages, categories, onSaveCat
           <button style={styles.ghostBtn} onClick={() => setShowCategories(true)}><Pencil size={15} /> Gérer les catégories</button>
           <button style={{ ...styles.ghostBtn, color: T.amber, borderColor: `${T.amber}55` }} onClick={nettoyerDoublons} title="Supprime les lignes strictement identiques (même mois, catégorie, libellé et montant)">
             <AlertTriangle size={15} /> Nettoyer les doublons
+          </button>
+          <button style={{ ...styles.ghostBtn, color: T.red, borderColor: `${T.red}55` }} onClick={() => setConfirmViderCat("choix")} title="Supprimer toutes les lignes d'une catégorie pour repartir propre">
+            <Trash2 size={15} /> Vider une catégorie
           </button>
           <button style={styles.primaryBtn} onClick={() => setModal({ id: "dep" + Date.now(), mois: dernierMoisAvecDonnee, categorie: categories[0], libelle: "", montant: 0 })}><Plus size={16} /> Nouvelle dépense</button>
         </div>
@@ -2324,6 +2354,37 @@ function DepensesView({ depenses, onSave, players, stages, categories, onSaveCat
 
       {showCategories && (
         <CategoriesModal categories={categories} onSave={onSaveCategories} onClose={() => setShowCategories(false)} />
+      )}
+
+      {confirmViderCat && (
+        <div style={styles.overlay} onClick={() => setConfirmViderCat(null)}>
+          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.modalHead}>
+              <span style={styles.modalTitle}>Vider une catégorie</span>
+              <button style={styles.iconBtn} onClick={() => setConfirmViderCat(null)}><X size={16} /></button>
+            </div>
+            <div style={styles.modalBody}>
+              <div style={{ fontSize: 12.5, color: T.mute, marginBottom: 14, lineHeight: 1.5 }}>
+                Supprime <strong>toutes</strong> les lignes de la catégorie choisie, tous mois confondus — pratique pour repartir propre avant de réimporter un fichier, sans risque de doublon résiduel.
+              </div>
+              {[...categoriesRevenus, ...categoriesDepenses].map(cat => {
+                const nb = list.filter(d => d.categorie === cat).length;
+                if (nb === 0) return null;
+                return (
+                  <div key={cat} style={styles.row}>
+                    <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{cat}</span>
+                    <span style={{ fontSize: 11.5, color: T.dim, marginRight: 10 }}>{nb} ligne{nb > 1 ? "s" : ""}</span>
+                    {confirmViderCat === cat ? (
+                      <button style={{ ...styles.iconBtn, color: T.red, borderColor: `${T.red}55` }} onClick={() => viderCategorie(cat)}><Check size={13} /></button>
+                    ) : (
+                      <button style={styles.iconBtn} onClick={() => setConfirmViderCat(cat)}><Trash2 size={13} /></button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       )}
 
       <footer style={styles.footer}>CADART Tennis Academy · Tableau de bord financier — enregistré automatiquement.</footer>
