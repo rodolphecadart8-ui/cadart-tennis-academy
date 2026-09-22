@@ -59,7 +59,7 @@ const SALLES = ["Salle physique 1", "Salle physique 2"];
 function computeFacilityGroups(players) {
   const map = {};
   (players || []).forEach(p => {
-    sessionsOf(p).forEach(s => {
+    sessionsAujourdHui(p).forEach(s => {
       if (!s || !s.court) return;
       const key = s.court;
       if (!map[key]) map[key] = [];
@@ -484,6 +484,20 @@ function sessionsOf(p) {
   if (p.session) return [p.session];
   return [];
 }
+/* Chaque séance porte désormais un champ "jour" (Lundi…Dimanche), pour un planning
+   récurrent sur toute la semaine. Une séance sans jour précisé (anciennes fiches) est
+   traitée comme "tous les jours", pour ne rien casser des plannings déjà en place. */
+const JOURS_SEMAINE = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
+function jourAujourdHui() {
+  const jour = new Date().toLocaleDateString("fr-FR", { weekday: "long" });
+  return jour.charAt(0).toUpperCase() + jour.slice(1);
+}
+/* Séances à afficher aujourd'hui (Planning, tableau de bord, TV…) : celles du jour
+   précisé, plus celles sans jour précisé (compatibilité avec l'existant). */
+function sessionsAujourdHui(p) {
+  const today = jourAujourdHui();
+  return sessionsOf(p).filter(s => !s.jour || s.jour === today);
+}
 function codeFromId(id) {
   let hash = 0;
   for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
@@ -827,7 +841,7 @@ function analyze(p) {
   if (p.load === "élevée") flags.push({ kind: "risk", level: "med", label: "Charge élevée" });
   if (p.form != null && p.form < 75) flags.push({ kind: "watch", level: "med", label: `Forme en baisse (${p.form}%)` });
   if (p.serviceTrend != null && p.serviceTrend >= 8) flags.push({ kind: "progress", level: "good", label: `Progression service +${p.serviceTrend}%` });
-  const isComp = sessionsOf(p).some(s => s.status === "competition");
+  const isComp = sessionsAujourdHui(p).some(s => s.status === "competition");
   if (isComp) flags.push({ kind: "info", level: "info", label: "Compétition aujourd'hui" });
 
   const highs = flags.filter(f => f.level === "high").length;
@@ -1473,7 +1487,7 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
   const planning = useMemo(() => {
     const entries = [];
     players.forEach(p => {
-      sessionsOf(p).filter(s => s.time).forEach(s => entries.push({ ...p, session: s }));
+      sessionsAujourdHui(p).filter(s => s.time).forEach(s => entries.push({ ...p, session: s }));
     });
     return entries.sort((a, b) => a.session.time.localeCompare(b.session.time));
   }, [players]);
@@ -1481,7 +1495,7 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
   const occupied = [...facilityGroups.courts, ...facilityGroups.salles].filter(g => g.players.length > 0).length;
   const competitionPlayers = useMemo(
     () => players
-      .map(p => ({ ...p, session: sessionsOf(p).find(s => s.status === "competition") }))
+      .map(p => ({ ...p, session: sessionsAujourdHui(p).find(s => s.status === "competition") }))
       .filter(p => p.session),
     [players]
   );
@@ -3412,14 +3426,14 @@ function StageModal({ initial, onSave, onClose }) {
 function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGroups, onOpenPlayer, onGoPlanning, depenses, stages, role }) {
   const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
   const joueurs = players.length;
-  const seances = players.reduce((a, p) => a + sessionsOf(p).filter(s => s.time && s.status !== "competition").length, 0);
+  const seances = players.reduce((a, p) => a + sessionsAujourdHui(p).filter(s => s.time && s.status !== "competition").length, 0);
   const tests = players.filter(p => p.testToday).length;
   const enComp = competitionPlayers.length;
 
   // Remplissage des courts (vrai calcul depuis le planning)
   const courtSet = {};
   players.forEach(p => {
-    sessionsOf(p).forEach(s => {
+    sessionsAujourdHui(p).forEach(s => {
       const c = s.court;
       if (c && !/salle/i.test(c) && s.time) {
         if (!courtSet[c]) courtSet[c] = new Set();
@@ -3957,7 +3971,7 @@ function PlayerRow({ p, onOpen, onEdit, onDelete }) {
   const [hover, setHover] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const c = sevColor(p.a.severity);
-  const seances = sessionsOf(p);
+  const seances = sessionsAujourdHui(p);
   const premiereSeance = seances[0];
   const st = statusMeta[premiereSeance?.status] || {};
   return (
@@ -4089,7 +4103,7 @@ function PlayerModal({ initial, onSave, onClose }) {
   });
   const set = (k, v) => setF({ ...f, [k]: v });
   const setSession = (idx, k, v) => setF({ ...f, sessions: f.sessions.map((s, i) => (i === idx ? { ...s, [k]: v } : s)) });
-  const addSession = () => setF({ ...f, sessions: [...f.sessions, { id: "sess" + Date.now(), time: "", end: "", type: "", court: "", status: "entrainement", coach: f.sessions[0] ? f.sessions[0].coach : "Rodolphe", coachPhone: "" }] });
+  const addSession = () => setF({ ...f, sessions: [...f.sessions, { id: "sess" + Date.now(), jour: "", time: "", end: "", type: "", court: "", status: "entrainement", coach: f.sessions[0] ? f.sessions[0].coach : "Rodolphe", coachPhone: "" }] });
   const removeSession = (idx) => setF({ ...f, sessions: f.sessions.filter((_, i) => i !== idx) });
   const setFocus = (k, v) => setF({ ...f, focus: { ...f.focus, [k]: v } });
   const setObj = (i, v) => {
@@ -4207,32 +4221,36 @@ function PlayerModal({ initial, onSave, onClose }) {
           </div>
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 18 }}>
-            <div style={styles.sectionLabel}>Séances du jour {f.sessions.length > 1 ? `(${f.sessions.length})` : ""}</div>
+            <div style={styles.sectionLabel}>Séances de la semaine {f.sessions.length > 1 ? `(${f.sessions.length})` : ""}</div>
             <button style={styles.smallBtn} onClick={addSession}><Plus size={13} /> Ajouter une séance</button>
           </div>
           <div style={{ fontSize: 11, color: T.dim, marginTop: -6, marginBottom: 10 }}>
-            Plusieurs séances possibles le même jour — ex : tennis le matin, physique l'après-midi.
+            Une séance par jour de la semaine (ou plusieurs le même jour) — ex : tennis le lundi, physique le mercredi. Une séance sans jour précisé s'affiche tous les jours.
           </div>
           {f.sessions.map((s, idx) => (
             <div key={s.id || idx} style={{ border: `1px solid ${T.border2}`, borderRadius: 10, padding: 12, marginBottom: 10, background: T.bg2 }}>
-              {f.sessions.length > 1 && (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                  <span style={{ fontSize: 11.5, fontWeight: 700, color: T.mute }}>Séance {idx + 1}</span>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: T.mute }}>Séance {idx + 1}</span>
+                {f.sessions.length > 1 && (
                   <button style={styles.iconBtn} onClick={() => removeSession(idx)} title="Supprimer cette séance"><Trash2 size={13} /></button>
-                </div>
-              )}
+                )}
+              </div>
               <div style={styles.grid3}>
+                <Field label="Jour">
+                  <Select value={s.jour || ""} onChange={(v) => setSession(idx, "jour", v)}
+                    options={[["", "Tous les jours"], ...JOURS_SEMAINE.map(j => [j, j])]} />
+                </Field>
                 <Field label="Heure de début">
                   <input style={styles.input} value={s.time} placeholder="15:00" onChange={(e) => setSession(idx, "time", e.target.value)} />
                 </Field>
                 <Field label="Heure de fin">
                   <input style={styles.input} value={s.end || ""} placeholder="16:30" onChange={(e) => setSession(idx, "end", e.target.value)} />
                 </Field>
+              </div>
+              <div style={styles.grid3}>
                 <Field label="Type de séance">
                   <input style={styles.input} value={s.type} placeholder="Tennis, Physique, Service + Retour…" onChange={(e) => setSession(idx, "type", e.target.value)} />
                 </Field>
-              </div>
-              <div style={styles.grid3}>
                 <Field label="Court / lieu">
                   <input style={styles.input} value={s.court} placeholder="Court 2 ou Salle physique 1" onChange={(e) => setSession(idx, "court", e.target.value)} />
                 </Field>
@@ -4240,9 +4258,12 @@ function PlayerModal({ initial, onSave, onClose }) {
                   <Select value={s.status} onChange={(v) => setSession(idx, "status", v)}
                     options={[["entrainement", "Entraînement"], ["competition", "Compétition"], ["recuperation", "Récupération"]]} />
                 </Field>
+              </div>
+              <div style={styles.grid2}>
                 <Field label="Coach de la séance">
                   <input style={styles.input} value={s.coach || ""} placeholder="Rodolphe" onChange={(e) => setSession(idx, "coach", e.target.value)} />
                 </Field>
+                <div />
               </div>
             </div>
           ))}
@@ -5036,7 +5057,7 @@ function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false 
   const days = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
   const chargeData = d.charge.map((v, i) => ({ d: days[i] || `J${i + 1}`, v }));
   const chargeTotal = d.charge.reduce((a, b) => a + b, 0).toFixed(1);
-  const seancesJour = sessionsOf(p);
+  const seancesJour = sessionsAujourdHui(p);
   const tabs = ["Aperçu", "Analyse détaillée", "Human Fab", "Physique", "Vidéos", "Résultats", "Santé", "Scolarité", "Objectifs", "Rapports mensuels", "Historique"];
 
   return (
