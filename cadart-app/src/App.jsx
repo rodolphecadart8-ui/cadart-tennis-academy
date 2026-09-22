@@ -59,10 +59,15 @@ const SALLES = ["Salle physique 1", "Salle physique 2"];
 function computeFacilityGroups(players) {
   const map = {};
   (players || []).forEach(p => {
-    if (!p.session || !p.session.court) return;
-    const key = p.session.court;
-    if (!map[key]) map[key] = [];
-    map[key].push(p);
+    sessionsOf(p).forEach(s => {
+      if (!s || !s.court) return;
+      const key = s.court;
+      if (!map[key]) map[key] = [];
+      // "Joueur virtuel" portant CETTE séance précise en tant que p.session (singulier) —
+      // permet à tous les composants d'affichage existants (CourtCard, etc.) de continuer
+      // à fonctionner sans changement, même si le joueur a plusieurs séances dans la journée.
+      map[key].push({ ...p, session: s });
+    });
   });
   const isSalle = (n) => /salle/i.test(n);
   const extras = Object.keys(map).filter(n => !COURTS.includes(n) && !SALLES.includes(n));
@@ -471,6 +476,14 @@ function genPhysiqueEtStretching() {
 SEED.push(...genPhysiqueEtStretching());
 
 /* Code d'accès joueur (4 chiffres, déterministe à partir de l'id) — pour l'espace joueur en lecture limitée */
+/* Un joueur peut désormais avoir plusieurs séances dans la journée (ex : tennis le matin,
+   physique l'après-midi). Nouveau champ : p.sessions (tableau). Ancien champ p.session (un seul
+   objet) reste lu en compatibilité pour les fiches jamais rouvertes depuis ce changement. */
+function sessionsOf(p) {
+  if (p.sessions && p.sessions.length) return p.sessions;
+  if (p.session) return [p.session];
+  return [];
+}
 function codeFromId(id) {
   let hash = 0;
   for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
@@ -814,12 +827,12 @@ function analyze(p) {
   if (p.load === "élevée") flags.push({ kind: "risk", level: "med", label: "Charge élevée" });
   if (p.form != null && p.form < 75) flags.push({ kind: "watch", level: "med", label: `Forme en baisse (${p.form}%)` });
   if (p.serviceTrend != null && p.serviceTrend >= 8) flags.push({ kind: "progress", level: "good", label: `Progression service +${p.serviceTrend}%` });
-  if (p.session && p.session.status === "competition") flags.push({ kind: "info", level: "info", label: "Compétition aujourd'hui" });
+  const isComp = sessionsOf(p).some(s => s.status === "competition");
+  if (isComp) flags.push({ kind: "info", level: "info", label: "Compétition aujourd'hui" });
 
   const highs = flags.filter(f => f.level === "high").length;
   const meds = flags.filter(f => f.level === "med").length;
   const hasProgress = flags.some(f => f.kind === "progress");
-  const isComp = p.session && p.session.status === "competition";
 
   let severity = "ok";
   if (highs > 0) severity = "high";
@@ -1377,20 +1390,24 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
           const idxExistant = nextPlayers.findIndex(p => p.name.trim().toLowerCase() === nomCsv.toLowerCase());
 
           if (idxExistant !== -1) {
-            // Joueur déjà présent : on met à jour son créneau (et le tarif/classement si précisés), sans dupliquer.
+            // Joueur déjà présent : on met à jour sa PREMIÈRE séance (et le tarif/classement si précisés),
+            // sans dupliquer et sans toucher à ses éventuelles autres séances de la journée.
             const existant = nextPlayers[idxExistant];
+            const seancesExistantes = sessionsOf(existant);
+            const premiereSeance = seancesExistantes[0] || { time: "", end: "", type: "", court: "", status: "entrainement", coach: "", coachPhone: "" };
+            const seanceMaj = {
+              ...premiereSeance,
+              time: r.heure_debut || premiereSeance.time,
+              end: r.heure_fin || premiereSeance.end,
+              type: r.type || premiereSeance.type,
+              court: r.court || premiereSeance.court,
+              coach: r.coach || premiereSeance.coach,
+            };
             nextPlayers[idxExistant] = {
               ...existant,
               tarifMensuel: r.tarif ? (parseFloat(r.tarif) || existant.tarifMensuel) : existant.tarifMensuel,
               classementFFT: r.classement_francais ? r.classement_francais.trim() : existant.classementFFT,
-              session: {
-                ...existant.session,
-                time: r.heure_debut || existant.session.time,
-                end: r.heure_fin || existant.session.end,
-                type: r.type || existant.session.type,
-                court: r.court || existant.session.court,
-                coach: r.coach || existant.session.coach,
-              },
+              sessions: [seanceMaj, ...seancesExistantes.slice(1)],
             };
             nbMisAJour++;
           } else {
@@ -1450,21 +1467,31 @@ function CoachDashboard({ onLogout, adminEmail, role }) {
   );
   const priorities = analyzed.filter(p => p.a.severity === "high" || p.a.severity === "med");
   const goodNews = analyzed.filter(p => p.a.severity === "good");
-  const planning = useMemo(
-    () => players.filter(p => p.session && p.session.time)
-      .sort((a, b) => a.session.time.localeCompare(b.session.time)),
-    [players]
-  );
+  // Une entrée par séance (pas par joueur) — un joueur avec 2 séances apparaît 2 fois,
+  // chacune portant sa propre séance en tant que p.session (singulier) pour compatibilité
+  // avec les composants d'affichage existants (RemindersModal, etc.).
+  const planning = useMemo(() => {
+    const entries = [];
+    players.forEach(p => {
+      sessionsOf(p).filter(s => s.time).forEach(s => entries.push({ ...p, session: s }));
+    });
+    return entries.sort((a, b) => a.session.time.localeCompare(b.session.time));
+  }, [players]);
   const facilityGroups = useMemo(() => computeFacilityGroups(players), [players]);
   const occupied = [...facilityGroups.courts, ...facilityGroups.salles].filter(g => g.players.length > 0).length;
-  const competitionPlayers = players.filter(p => p.session && p.session.status === "competition");
+  const competitionPlayers = useMemo(
+    () => players
+      .map(p => ({ ...p, session: sessionsOf(p).find(s => s.status === "competition") }))
+      .filter(p => p.session),
+    [players]
+  );
 
   const kpis = [
     { icon: Users, label: "Joueurs", value: players.length, tint: T.green },
     { icon: Activity, label: "Séances aujourd'hui", value: planning.length, tint: T.green },
     { icon: FlaskConical, label: "Tests prévus", value: players.filter(p => p.testToday).length, tint: T.blue },
     { icon: AlertTriangle, label: "Alertes actives", value: priorities.length, tint: priorities.length ? T.amber : T.dim },
-    { icon: Trophy, label: "En compétition", value: players.filter(p => p.session && p.session.status === "competition").length, tint: T.blue },
+    { icon: Trophy, label: "En compétition", value: competitionPlayers.length, tint: T.blue },
   ];
 
   if (loading) {
@@ -1835,7 +1862,8 @@ function buildAcademySummary(players, stages, depenses) {
   // Rendement par coach (même logique que le tableau de bord), basé sur le dernier mois de dépenses renseigné
   const coachMap = {};
   players.forEach(p => {
-    const coachName = (p.session && p.session.coach) || "Non assigné";
+    const premiereSeance = sessionsOf(p)[0];
+    const coachName = (premiereSeance && premiereSeance.coach) || "Non assigné";
     if (!coachMap[coachName]) coachMap[coachName] = [];
     coachMap[coachName].push(p);
   });
@@ -3384,18 +3412,20 @@ function StageModal({ initial, onSave, onClose }) {
 function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGroups, onOpenPlayer, onGoPlanning, depenses, stages, role }) {
   const eur = (n) => "€" + Math.round(n).toLocaleString("fr-FR");
   const joueurs = players.length;
-  const seances = players.filter(p => p.session && p.session.time && p.session.status !== "competition").length;
+  const seances = players.reduce((a, p) => a + sessionsOf(p).filter(s => s.time && s.status !== "competition").length, 0);
   const tests = players.filter(p => p.testToday).length;
   const enComp = competitionPlayers.length;
 
   // Remplissage des courts (vrai calcul depuis le planning)
   const courtSet = {};
   players.forEach(p => {
-    const c = p.session && p.session.court;
-    if (c && !/salle/i.test(c) && p.session.time) {
-      if (!courtSet[c]) courtSet[c] = new Set();
-      courtSet[c].add(p.session.time);
-    }
+    sessionsOf(p).forEach(s => {
+      const c = s.court;
+      if (c && !/salle/i.test(c) && s.time) {
+        if (!courtSet[c]) courtSet[c] = new Set();
+        courtSet[c].add(s.time);
+      }
+    });
   });
   const usedSlots = Object.values(courtSet).reduce((a, s) => a + s.size, 0);
   const capacity = COURTS.length * SLOTS.length;
@@ -3428,7 +3458,8 @@ function Cockpit({ players, analyzed, priorities, competitionPlayers, facilityGr
   // Rendement par coach : revenu des enfants gérés − prestation versée au coach
   const coachMap = {};
   players.forEach(p => {
-    const coachName = (p.session && p.session.coach) || "Non assigné";
+    const premiereSeance = sessionsOf(p)[0];
+    const coachName = (premiereSeance && premiereSeance.coach) || "Non assigné";
     if (!coachMap[coachName]) coachMap[coachName] = [];
     coachMap[coachName].push(p);
   });
@@ -3926,7 +3957,9 @@ function PlayerRow({ p, onOpen, onEdit, onDelete }) {
   const [hover, setHover] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const c = sevColor(p.a.severity);
-  const st = statusMeta[p.session?.status] || {};
+  const seances = sessionsOf(p);
+  const premiereSeance = seances[0];
+  const st = statusMeta[premiereSeance?.status] || {};
   return (
     <div
       style={{ ...styles.row, background: hover ? T.cardHi : "transparent" }}
@@ -3981,9 +4014,9 @@ function PlayerRow({ p, onOpen, onEdit, onDelete }) {
 
       {/* Séance */}
       <div style={{ width: 140 }}>
-        {p.session?.time ? (
+        {premiereSeance?.time ? (
           <>
-            <div style={styles.rowSession}>{p.session.time} · {p.session.type}</div>
+            <div style={styles.rowSession}>{premiereSeance.time} · {premiereSeance.type}{seances.length > 1 ? ` (+${seances.length - 1})` : ""}</div>
             <span style={{ ...styles.statusPill, background: `${st.color}1c`, color: st.color }}>{st.label}</span>
           </>
         ) : <span style={{ color: T.dim, fontSize: 12 }}>Pas de séance</span>}
@@ -4039,7 +4072,7 @@ function PlayerModal({ initial, onSave, onClose }) {
       name: "", flag: "🎾", sex: "M", age: 16, form: 85,
       sleep: 8, hrv: 70, fatigue: "low", stress: "low", load: "optimale",
       serviceTrend: 0, testToday: false,
-      session: { time: "", type: "", court: "", status: "entrainement", coach: "Rodolphe", coachPhone: "" },
+      sessions: [{ id: "sess1", time: "", end: "", type: "", court: "", status: "entrainement", coach: "Rodolphe", coachPhone: "" }],
       utr: "", itf: "", classementFFT: "", tarifMensuel: 0, codeAcces: codeFromId(newId),
       objectifsMois: ["", ""], exercices: [],
       focus: { axis: "", note: "" },
@@ -4050,10 +4083,14 @@ function PlayerModal({ initial, onSave, onClose }) {
       exercices: base.exercices || [],
       objectifsMois: base.objectifsMois || (base.objectifMois ? [base.objectifMois, ""] : ["", ""]),
       codeAcces: base.codeAcces || codeFromId(base.id),
+      // Compatibilité : anciennes fiches avec un seul p.session → basculées en tableau à l'ouverture.
+      sessions: (base.sessions && base.sessions.length) ? base.sessions : (base.session ? [{ id: "sess1", ...base.session }] : [{ id: "sess1", time: "", end: "", type: "", court: "", status: "entrainement", coach: "Rodolphe", coachPhone: "" }]),
     };
   });
   const set = (k, v) => setF({ ...f, [k]: v });
-  const setS = (k, v) => setF({ ...f, session: { ...f.session, [k]: v } });
+  const setSession = (idx, k, v) => setF({ ...f, sessions: f.sessions.map((s, i) => (i === idx ? { ...s, [k]: v } : s)) });
+  const addSession = () => setF({ ...f, sessions: [...f.sessions, { id: "sess" + Date.now(), time: "", end: "", type: "", court: "", status: "entrainement", coach: f.sessions[0] ? f.sessions[0].coach : "Rodolphe", coachPhone: "" }] });
+  const removeSession = (idx) => setF({ ...f, sessions: f.sessions.filter((_, i) => i !== idx) });
   const setFocus = (k, v) => setF({ ...f, focus: { ...f.focus, [k]: v } });
   const setObj = (i, v) => {
     const arr = [...(f.objectifsMois || ["", ""])];
@@ -4169,37 +4206,53 @@ function PlayerModal({ initial, onSave, onClose }) {
             </Field>
           </div>
 
-          <div style={styles.sectionLabel}>Séance du jour</div>
-          <div style={styles.grid3}>
-            <Field label="Heure">
-              <input style={styles.input} value={f.session.time} placeholder="15:00" onChange={(e) => setS("time", e.target.value)} />
-            </Field>
-            <Field label="Type">
-              <input style={styles.input} value={f.session.type} placeholder="Service + Retour" onChange={(e) => setS("type", e.target.value)} />
-            </Field>
-            <Field label="Court / lieu">
-              <input style={styles.input} value={f.session.court} placeholder="Court 2" onChange={(e) => setS("court", e.target.value)} />
-            </Field>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 18 }}>
+            <div style={styles.sectionLabel}>Séances du jour {f.sessions.length > 1 ? `(${f.sessions.length})` : ""}</div>
+            <button style={styles.smallBtn} onClick={addSession}><Plus size={13} /> Ajouter une séance</button>
           </div>
-          <div style={styles.grid3}>
-            <Field label="Statut séance">
-              <Select value={f.session.status} onChange={(v) => setS("status", v)}
-                options={[["entrainement", "Entraînement"], ["competition", "Compétition"], ["recuperation", "Récupération"]]} />
-            </Field>
+          <div style={{ fontSize: 11, color: T.dim, marginTop: -6, marginBottom: 10 }}>
+            Plusieurs séances possibles le même jour — ex : tennis le matin, physique l'après-midi.
+          </div>
+          {f.sessions.map((s, idx) => (
+            <div key={s.id || idx} style={{ border: `1px solid ${T.border2}`, borderRadius: 10, padding: 12, marginBottom: 10, background: T.bg2 }}>
+              {f.sessions.length > 1 && (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <span style={{ fontSize: 11.5, fontWeight: 700, color: T.mute }}>Séance {idx + 1}</span>
+                  <button style={styles.iconBtn} onClick={() => removeSession(idx)} title="Supprimer cette séance"><Trash2 size={13} /></button>
+                </div>
+              )}
+              <div style={styles.grid3}>
+                <Field label="Heure de début">
+                  <input style={styles.input} value={s.time} placeholder="15:00" onChange={(e) => setSession(idx, "time", e.target.value)} />
+                </Field>
+                <Field label="Heure de fin">
+                  <input style={styles.input} value={s.end || ""} placeholder="16:30" onChange={(e) => setSession(idx, "end", e.target.value)} />
+                </Field>
+                <Field label="Type de séance">
+                  <input style={styles.input} value={s.type} placeholder="Tennis, Physique, Service + Retour…" onChange={(e) => setSession(idx, "type", e.target.value)} />
+                </Field>
+              </div>
+              <div style={styles.grid3}>
+                <Field label="Court / lieu">
+                  <input style={styles.input} value={s.court} placeholder="Court 2 ou Salle physique 1" onChange={(e) => setSession(idx, "court", e.target.value)} />
+                </Field>
+                <Field label="Statut séance">
+                  <Select value={s.status} onChange={(v) => setSession(idx, "status", v)}
+                    options={[["entrainement", "Entraînement"], ["competition", "Compétition"], ["recuperation", "Récupération"]]} />
+                </Field>
+                <Field label="Coach de la séance">
+                  <input style={styles.input} value={s.coach || ""} placeholder="Rodolphe" onChange={(e) => setSession(idx, "coach", e.target.value)} />
+                </Field>
+              </div>
+            </div>
+          ))}
+          <div style={styles.grid2}>
             <Field label="Test prévu aujourd'hui">
               <button style={{ ...styles.toggle, ...(f.testToday ? styles.toggleOn : {}) }} onClick={() => set("testToday", !f.testToday)}>
                 {f.testToday ? "Oui" : "Non"}
               </button>
             </Field>
             <div />
-          </div>
-          <div style={styles.grid2}>
-            <Field label="Coach de la séance">
-              <input style={styles.input} value={f.session.coach || ""} placeholder="Rodolphe" onChange={(e) => setS("coach", e.target.value)} />
-            </Field>
-            <Field label="Tél. coach (optionnel)">
-              <input style={styles.input} value={f.session.coachPhone || ""} placeholder="+33 6 12 34 56 78" onChange={(e) => setS("coachPhone", e.target.value)} />
-            </Field>
           </div>
 
           <div style={styles.sectionLabel}>Objectifs &amp; exercices du mois</div>
@@ -4983,7 +5036,7 @@ function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false 
   const days = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
   const chargeData = d.charge.map((v, i) => ({ d: days[i] || `J${i + 1}`, v }));
   const chargeTotal = d.charge.reduce((a, b) => a + b, 0).toFixed(1);
-  const st = statusMeta[p.session && p.session.status] || {};
+  const seancesJour = sessionsOf(p);
   const tabs = ["Aperçu", "Analyse détaillée", "Human Fab", "Physique", "Vidéos", "Résultats", "Santé", "Scolarité", "Objectifs", "Rapports mensuels", "Historique"];
 
   return (
@@ -5154,18 +5207,27 @@ function PlayerProfile({ player, onBack, onEdit, onSavePlayer, readOnly = false 
           </div>
         </div>
         <div style={styles.pcard}>
-          <div style={styles.pcardTitle}>Prochaine séance</div>
-          {p.session && p.session.time ? (
-            <div>
-              <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 6 }}>{p.session.type || "Séance"}</div>
-              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12.5, color: T.mute }}>
-                <span><Clock size={13} color={T.dim} /> {p.session.time}</span>
-                <span><MapPin size={13} color={T.dim} /> {p.session.court}</span>
-                <span><UserRound size={13} color={T.dim} /> Coach Rodolphe</span>
-              </div>
-              <span style={{ ...styles.statusPill, background: `${st.color}1c`, color: st.color, marginTop: 12, display: "inline-block" }}>{st.label}</span>
+          <div style={styles.pcardTitle}>Séance{seancesJour.length > 1 ? "s" : ""} du jour{seancesJour.length > 1 ? ` (${seancesJour.length})` : ""}</div>
+          {seancesJour.length === 0 ? (
+            <div style={{ color: T.dim, fontSize: 13 }}>Aucune séance planifiée.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {seancesJour.map((s, i) => {
+                const stS = statusMeta[s.status] || {};
+                return (
+                  <div key={s.id || i} style={i > 0 ? { paddingTop: 12, borderTop: `1px solid ${T.border2}` } : undefined}>
+                    <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 6 }}>{s.type || "Séance"}</div>
+                    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12.5, color: T.mute }}>
+                      {s.time && <span><Clock size={13} color={T.dim} /> {s.time}{s.end ? ` – ${s.end}` : ""}</span>}
+                      {s.court && <span><MapPin size={13} color={T.dim} /> {s.court}</span>}
+                      {s.coach && <span><UserRound size={13} color={T.dim} /> Coach {s.coach}</span>}
+                    </div>
+                    <span style={{ ...styles.statusPill, background: `${stS.color}1c`, color: stS.color, marginTop: 12, display: "inline-block" }}>{stS.label}</span>
+                  </div>
+                );
+              })}
             </div>
-          ) : <div style={{ color: T.dim, fontSize: 13 }}>Aucune séance planifiée.</div>}
+          )}
         </div>
       </div>
 
